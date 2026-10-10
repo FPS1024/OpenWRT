@@ -63,6 +63,11 @@ jobs:
           cd "$OPENWRT_DIR"
           make -j"$(nproc)" toolchain/install > "$LOG_DIR/toolchain.log" 2>&1 || { cat "$LOG_DIR/toolchain.log"; exit 1; }
 
+      - name: Compile target kernel
+        run: |
+          cd "$OPENWRT_DIR"
+          make -j"$(nproc)" target/linux/compile > "$LOG_DIR/kernel.log" 2>&1 || { cat "$LOG_DIR/kernel.log"; exit 1; }
+
       - name: Compile UWE5622 driver package
         run: |
           cd "$OPENWRT_DIR"
