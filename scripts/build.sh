@@ -1,6 +1,6 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Reproducible OpenWrt build for Orange Pi 3 LTS.
-set -eu
+set -euo pipefail
 
 OW_COMMIT="${OW_COMMIT:-58584c6f2829a7e5d77376ab68aae3dcc4a392d8}"
 JOBS="${JOBS:-$(nproc)}"
@@ -15,12 +15,7 @@ export FORCE_UNSAFE_CONFIGURE=1
 run_logged() {
 	log_file="$1"
 	shift
-	if "$@" > "$log_file" 2>&1; then
-		cat "$log_file"
-	else
-		cat "$log_file"
-		return 1
-	fi
+	"$@" 2>&1 | tee "$log_file"
 }
 
 if [ ! -d "$OW_DIR/.git" ]; then
@@ -60,15 +55,13 @@ cp .config "$LOG_DIR/openwrt.config"
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
-echo ">> Build image (OpenWrt make reuses completed toolchain, kernel, and package outputs)"
-if ! make -j"$JOBS" > "$LOG_DIR/build.log" 2>&1; then
-	cat "$LOG_DIR/build.log"
+echo ">> Build firmware (make reuses valid outputs and rebuilds any missing dependencies)"
+if ! make -j"$JOBS" 2>&1 | tee "$LOG_DIR/build.log"; then
 	if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
 		df -h > "$LOG_DIR/disk-after-build-failure.txt"
 		df -i >> "$LOG_DIR/disk-after-build-failure.txt"
 		echo ">> Retry target/linux/install serially with verbose output"
-		if ! make -j1 V=s target/linux/install > "$LOG_DIR/target-linux-install.log" 2>&1; then
-			cat "$LOG_DIR/target-linux-install.log"
+		if ! make -j1 V=s target/linux/install 2>&1 | tee "$LOG_DIR/target-linux-install.log"; then
 			exit 1
 		fi
 		echo ">> Verbose target install passed; resume full image build"
