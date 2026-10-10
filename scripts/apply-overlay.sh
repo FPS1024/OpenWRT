@@ -12,6 +12,11 @@ KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/config-6.6"
 
 cp -a "$HERE/overlay/." "$OW_DIR/"
 
+# Drop this obsolete project patch from an existing local build tree. It forces
+# a three-argument callback although the pinned OpenWrt 24.10 header expects
+# the two-argument set_wiphy_params callback.
+rm -f "$OW_DIR/package/kernel/uwe5622/patches/080-cfg80211-set-wiphy-params-backport-radio-idx.patch"
+
 # Linux 6.6 receives a backport that makes REALTEK_PHY_HWMON a visible Kconfig
 # option. Since REALTEK_PHY is enabled for sunxi, pin the optional HWMON choice
 # in the kernel config fragment so non-interactive syncconfig does not prompt.
