@@ -118,6 +118,8 @@ define Device/xunlong_orangepi-3-lts
   DEVICE_MODEL := Orange Pi 3 LTS
   DEVICE_PACKAGES := kmod-uwe5622 uwe5622-firmware wpad-basic-mbedtls
   $(Device/sun50i-h6)
+  SUNXI_PREBUILT_UBOOT := $(TOPDIR)/package/boot/uboot-sunxi/prebuilt/xunlong_orangepi-3-lts-u-boot-with-spl.bin
+  SUNXI_UBOOT_ENV := $(TOPDIR)/package/boot/uboot-sunxi/uEnv-h6.txt
 endef
 TARGET_DEVICES += xunlong_orangepi-3-lts
 

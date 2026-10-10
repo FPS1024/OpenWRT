@@ -46,7 +46,7 @@ dd if=... .img of=/dev/sdX bs=1M conv=fsync    # sdX = SD 卡，别写错！
 ```
 
 镜像里已经：
-- 使用项目 U-Boot 包暂存的启动脚本和 bootloader（写入偏移 8KB / sector 16）；
+- 直接使用仓库中的 SPL/U-Boot 二进制和 H6 启动环境生成 SD 卡镜像；SPL 写入偏移为 8KB（sector 16）；
 - 用**校准过的 DTS**（PMIC 走 r_i2c、Motorcomm PHY、rgmii-id、Wi-Fi SDIO 等）。
 
 ## 首次启动后的网络

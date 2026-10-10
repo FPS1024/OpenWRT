@@ -354,21 +354,6 @@ define U-Boot/orangepi_zero3
   ATF:=h616
 endef
 
-# Orange Pi 3 LTS (H6). U-Boot 2024.01 has no dedicated LTS target, so we
-# reuse the generic orangepi_3 (H6) SPL/U-Boot, which boots from SD/eMMC.
-# The kernel DTS supplies the correct board description (AXP805 on r_i2c,
-# Motorcomm RGMII PHY). A dedicated orangepi_3_lts defconfig/DT is the
-# follow-up once upstream U-Boot carries it.
-define U-Boot/orangepi_3_lts
-  BUILD_SUBTARGET:=cortexa53
-  NAME:=Xunlong Orange Pi 3 LTS
-  BUILD_DEVICES:=xunlong_orangepi-3-lts
-  DEPENDS:=+PACKAGE_u-boot-orangepi_3_lts:trusted-firmware-a-sunxi-h6
-  UENV:=h6
-  ATF:=h6
-  UBOOT_CONFIG:=orangepi_3
-endef
-
 define U-Boot/Bananapi_M2_Ultra
   BUILD_SUBTARGET:=cortexa7
   NAME:=Bananapi M2 Ultra
@@ -434,7 +419,6 @@ UBOOT_TARGETS := \
 	orangepi_pc2 \
 	orangepi_zero2 \
 	orangepi_zero3 \
-	orangepi_3_lts \
 	pangolin \
 	pine64_plus \
 	Sinovoip_BPI_M3 \
