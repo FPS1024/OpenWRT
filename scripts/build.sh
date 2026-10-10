@@ -54,7 +54,7 @@ echo ">> Build and install OpenWrt toolchain"
 run_logged "$LOG_DIR/toolchain.log" make -j"$JOBS" toolchain/install
 
 echo ">> Compile target kernel"
-run_logged "$LOG_DIR/kernel.log" make -j"$JOBS" target/linux/compile
+run_logged "$LOG_DIR/kernel.log" make -j1 V=s target/linux/compile
 
 echo ">> Compile UWE5622 kernel package first"
 run_logged "$LOG_DIR/uwe5622.log" make -j"$JOBS" package/kernel/uwe5622/compile V=s
