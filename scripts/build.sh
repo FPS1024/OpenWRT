@@ -50,6 +50,9 @@ cp .config "$LOG_DIR/openwrt.config"
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
+echo ">> Build and install OpenWrt toolchain"
+run_logged "$LOG_DIR/toolchain.log" make -j"$JOBS" toolchain/install
+
 echo ">> Compile UWE5622 kernel package first"
 run_logged "$LOG_DIR/uwe5622.log" make -j"$JOBS" package/kernel/uwe5622/compile V=s
 

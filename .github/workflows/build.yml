@@ -58,6 +58,11 @@ jobs:
           cd "$OPENWRT_DIR"
           make -j"$(nproc)" download > "$LOG_DIR/download.log" 2>&1 || { cat "$LOG_DIR/download.log"; exit 1; }
 
+      - name: Build and install OpenWrt toolchain
+        run: |
+          cd "$OPENWRT_DIR"
+          make -j"$(nproc)" toolchain/install > "$LOG_DIR/toolchain.log" 2>&1 || { cat "$LOG_DIR/toolchain.log"; exit 1; }
+
       - name: Compile UWE5622 driver package
         run: |
           cd "$OPENWRT_DIR"
