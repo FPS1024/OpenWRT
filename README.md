@@ -1,93 +1,57 @@
-# OpenWrt overlay — OrangePi 3 LTS (Allwinner H6)
+# Orange Pi 3 LTS · OpenWrt AP 路由器
 
-把本仓库当作 **OpenWrt 24.10 的差分 overlay**：`overlay/` 里的文件按 OpenWrt 源码树
-的相同路径覆盖上去，就得到带 OrangePi 3 LTS 板级支持 + UWE5622 Wi-Fi 驱动的构建树。
-OpenWrt 源码固定到 commit `58584c6f2829a7e5d77376ab68aae3dcc4a392d8`，驱动源也固定到
-`armbian/uwe5622` 的明确 commit，避免上游分支变化导致同一项目突然无法编译。
+为全志 H6 的 Orange Pi 3 LTS 构建 OpenWrt 24.10（Linux 6.6），包含板级 DTS、UWE5622 Wi-Fi 驱动、默认 AP 和 LuCI 网页管理。OpenWrt 源码固定在 [`58584c6`](https://github.com/openwrt/openwrt/commit/58584c6f2829a7e5d77376ab68aae3dcc4a392d8)。
 
-> ⚠️ **不要在 2 核 2G 的小机器上编译**（本项目的服务器就是因此假死重启过两次）。
-> 建议 ≥4 核 / ≥8G 内存 / ≥25G 空闲磁盘。
+Wi-Fi 已在 Orange Pi 3 LTS 实机上验证：手机可连接 AP、获取地址并通过有线 WAN 上网。驱动适配细节和排错步骤见 [Wi-Fi 驱动适配说明](README-WIFI.md)。
 
-## 内容
+## 默认网络
 
-```
-overlay/
-  target/linux/sunxi/patches-6.6/460-arm64-dts-allwinner-add-orangepi-3-lts.patch # DTS 源码
-  target/linux/sunxi/image/cortexa53.mk                     # 新增 xunlong_orangepi-3-lts 设备
-  target/linux/sunxi/base-files/etc/board.d/02_network      # eth0 -> WAN
-  target/linux/sunxi/base-files/etc/uci-defaults/99-opi3lts # br-lan/WAN network setup
-  package/kernel/uwe5622/                                   # sprdwl_ng 驱动（含 OpenWrt backport 补丁）
-  package/firmware/uwe5622-firmware/                        # UWE5622 固件
-  package/boot/uboot-sunxi/                                 # 提供预编译 SPL/U-Boot 和 H6 启动环境
-```
+| 项目 | 默认值 |
+| --- | --- |
+| WAN | `eth0`，DHCP 客户端 |
+| 路由器地址 | `192.168.8.1/24` |
+| LAN DHCP 地址池 | `192.168.8.100` 起 |
+| Wi-Fi | 2.4 GHz，信道 6，HT20，WPA2-PSK |
+| SSID / 密码 | `OrangePi-3-LTS` / `orangepi@7` |
+| LuCI | `http://192.168.8.1` |
 
-## 方案 A1 — GitHub Actions（推荐，零本机负担）
+Wi-Fi 密码是公开的初始值，部署后请立即修改。设备不预设 root 管理密码；首次启动通过串口运行 `passwd`，再登录 LuCI。当前构建脚本已选择 LuCI/uhttpd；已有的旧镜像不会因此自动获得网页管理，需刷入新的成功构建镜像。
 
-1. 在 GitHub 新建一个仓库，把本目录推上去（`main` 分支）。
-2. 进仓库 **Actions → Build OpenWrt for Orange Pi 3 LTS → Run workflow**。
-3. 跑完在 **Artifacts** 下载 `openwrt-opi3lts`（含 `*.img.gz`）。
+## 构建
 
-## 方案 A2 — 任意一台大机器
+推荐使用 Ubuntu x86-64，至少 4 核、8 GB 内存和 25 GB 可用磁盘。首次构建耗时较长；保留构建目录，之后 OpenWrt 会复用未变化的工具链、内核和软件包。
 
 ```sh
+# 在仓库根目录；第一次使用时会创建并保留 .work/openwrt
 sh scripts/build.sh
-# 产物: .work/openwrt/bin/targets/sunxi/cortexa53/openwrt-*.img.gz
-```
 
-本地构建目录 `.work/openwrt` 会保留。再次运行同一命令时，OpenWrt 的依赖和 stamp 会复用已经完成的 toolchain、内核、UWE5622 驱动及其他包，只重建配置或源码确实变更的部分；不要删除 `.work/openwrt`，也不要运行 `make clean` / `make dirclean`。如果已有一个 OpenWrt 源码/构建目录，直接指定它来复用：
-
-```sh
-# 在项目仓库根目录执行；这里的 ow 是已有的 OpenWrt 源码/构建目录
+# 已有 OpenWrt 构建目录时复用它
 OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 ```
 
-如果没有现成的 OpenWrt 构建目录，直接运行 `sh scripts/build.sh`；脚本会在 `.work/openwrt` 创建并保留它。第一次仍需完整编译，后续继续用同一命令即可增量构建，不需要另写脚本。GitHub-hosted runner 每次是新环境，和本地复用目录不同。
+也可推送到 `main` 或在 GitHub Actions 手动运行 **Build OpenWrt for Orange Pi 3 LTS**。成功后从 workflow artifact 下载 `openwrt-opi3lts`。本地和 CI 的产物位于 `bin/targets/sunxi/cortexa53/`，包含 ext4 与 squashfs SD 卡镜像。
 
-## 方案 A3 — 临时租一台大 VPS
+## 刷写
 
-随便租一台 ≥4C8G 的按量机器，`git clone` 本仓库后执行 `sh scripts/build.sh` 即可，完事删机器。
-
-## 烧写
+解压下载的 `.img.gz`，确认 `/dev/sdX` 是 SD 卡设备后写入：
 
 ```sh
-gunzip -k openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-sdcard.img.gz
-dd if=... .img of=/dev/sdX bs=1M conv=fsync    # sdX = SD 卡，别写错！
+gunzip -k openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img.gz
+sudo dd if=openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img \
+  of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-镜像里已经：
-- 直接使用仓库中的 SPL/U-Boot 二进制和 H6 启动环境生成 SD 卡镜像；SPL 写入偏移为 8KB（sector 16）；
-- 用**校准过的 DTS**（PMIC 走 r_i2c、Motorcomm PHY、rgmii-id、Wi-Fi SDIO 等）。
+**写错设备会清除该设备上的数据。** 镜像使用本仓库的 SPL/U-Boot 和 Orange Pi 3 LTS 专用设备树。
 
-## 首次启动后的网络
+## 修改 Wi-Fi
 
-- `eth0` = **WAN**（DHCP，插网线）
-- `br-lan` = **192.168.8.1**，Wi-Fi 客户端默认从 `192.168.8.100` 起通过 DHCP 获取地址
-- Wi-Fi 默认开启 **2.4 GHz / 信道 6 / HT20**，SSID `OrangePi-3-LTS`，WPA2-PSK 密码 `orangepi@7`
-- 内置 LuCI 和 uhttpd，连上 Wi-Fi 后可访问 `http://192.168.8.1` 管理路由器
-
-上述 Wi-Fi 密码是所有用户共用的公开默认值。部署后建议尽快换成自己的密码。设备不会设置固定的 root 管理密码；首次通过串口登录后运行 `passwd` 设置。
-设置 root 密码后，再登录 LuCI；LuCI 使用 root 管理员账号。
-
-用户可以随时通过 UCI 修改无线名称、密码和 2.4 GHz 信道，例如：
+可在 LuCI 的 **Network → Wireless** 修改，也可通过 SSH/串口使用 UCI：
 
 ```sh
-uci set wireless.default_radio0.ssid='自己的 Wi-Fi 名称'
-uci set wireless.default_radio0.key='自己的 Wi-Fi 密码'
-uci set wireless.radio0.channel='11'
+uci set wireless.default_radio0.ssid='自己的名称'
+uci set wireless.default_radio0.key='自己的至少八位密码'
 uci commit wireless
 wifi reload
 ```
 
-首次启动时，驱动启动脚本会创建上述默认 AP；已有无线配置会保留，不会在之后每次启动时覆盖用户设置。默认不创建 monitor 虚拟接口。
-
-## 设备树说明
-
-仓库包含的是 Linux DTS 源码补丁，不包含预编译的 39 KB DTB。DTS 会随目标内核编译，构建出的
-DTB 被打包进固件；具体 DTB 文件大小由内核编译结果决定。当前工作目录里没有单独提交 39 KB 的
-DTB 文件。
-
-## 无线验收
-
-Actions 会先单独编译 UWE5622 驱动包，并检查最终镜像及固件包是否生成。这只能证明驱动通过编译，
-不能代替实机验证。首次刷机后还需通过串口/有线确认 SDIO 设备识别、模块加载、`iw list` AP 能力、
-手机连接与 DHCP、WAN 出口，以及重启后的 AP 恢复情况。
+初次启动时驱动服务创建默认无线配置；之后会保留用户已有设置。
