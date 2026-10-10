@@ -18,7 +18,7 @@ overlay/
   target/linux/sunxi/base-files/etc/uci-defaults/99-opi3lts # br-lan/WAN network setup
   package/kernel/uwe5622/                                   # sprdwl_ng 驱动（含 OpenWrt backport 补丁）
   package/firmware/uwe5622-firmware/                        # UWE5622 固件
-  package/boot/uboot-sunxi/                                 # 生成启动脚本并暂存 Orange Pi 3 LTS U-Boot
+  package/boot/uboot-sunxi/                                 # 提供预编译 SPL/U-Boot 和 H6 启动环境
 ```
 
 ## 方案 A1 — GitHub Actions（推荐，零本机负担）
