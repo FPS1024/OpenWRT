@@ -34,6 +34,15 @@ sh scripts/build.sh
 # 产物: .work/openwrt/bin/targets/sunxi/cortexa53/openwrt-*.img.gz
 ```
 
+本地构建目录 `.work/openwrt` 会保留。再次运行同一命令时，OpenWrt 的依赖和 stamp 会复用已经完成的 toolchain、内核、UWE5622 驱动及其他包，只重建配置或源码确实变更的部分；不要删除 `.work/openwrt`，也不要运行 `make clean` / `make dirclean`。如果已有一个 OpenWrt 源码/构建目录，直接指定它来复用：
+
+```sh
+# 在项目仓库根目录执行；这里的 ow 是已有的 OpenWrt 源码/构建目录
+OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
+```
+
+如果没有现成的 OpenWrt 构建目录，直接运行 `sh scripts/build.sh`；脚本会在 `.work/openwrt` 创建并保留它。第一次仍需完整编译，后续继续用同一命令即可增量构建，不需要另写脚本。GitHub-hosted runner 每次是新环境，和本地复用目录不同。
+
 ## 方案 A3 — 临时租一台大 VPS
 
 随便租一台 ≥4C8G 的按量机器，`git clone` 本仓库后执行 `sh scripts/build.sh` 即可，完事删机器。

@@ -25,11 +25,16 @@ run_logged() {
 
 if [ ! -d "$OW_DIR/.git" ]; then
 	echo ">> Cloning OpenWrt at $OW_COMMIT"
-	rm -rf "$OW_DIR"
+	if [ -e "$OW_DIR" ] && [ -n "$(find "$OW_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+		echo "Refusing to replace non-empty directory without a Git checkout: $OW_DIR" >&2
+		exit 1
+	fi
 	git clone --no-checkout https://github.com/openwrt/openwrt.git "$OW_DIR"
 fi
 
-git -C "$OW_DIR" fetch --depth 1 origin "$OW_COMMIT"
+if ! git -C "$OW_DIR" cat-file -e "$OW_COMMIT^{commit}" 2>/dev/null; then
+	git -C "$OW_DIR" fetch --depth 1 origin "$OW_COMMIT"
+fi
 git -C "$OW_DIR" checkout --detach "$OW_COMMIT"
 echo "OpenWrt: $(git -C "$OW_DIR" rev-parse HEAD)"
 
@@ -37,11 +42,16 @@ echo ">> Applying project overlay"
 sh "$HERE/scripts/apply-overlay.sh" "$OW_DIR"
 
 cd "$OW_DIR"
-cat > .config <<EOF
+if [ ! -s .config ] \
+	|| ! grep -qx 'CONFIG_TARGET_sunxi=y' .config \
+	|| ! grep -qx 'CONFIG_TARGET_sunxi_cortexa53=y' .config \
+	|| ! grep -qx "CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y" .config; then
+	cat > .config <<EOF
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
 EOF
+fi
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
@@ -50,16 +60,7 @@ cp .config "$LOG_DIR/openwrt.config"
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
-echo ">> Build and install OpenWrt toolchain"
-run_logged "$LOG_DIR/toolchain.log" make -j"$JOBS" toolchain/install
-
-echo ">> Compile target kernel"
-run_logged "$LOG_DIR/kernel.log" make -j"$JOBS" target/linux/compile
-
-echo ">> Compile UWE5622 kernel package first"
-run_logged "$LOG_DIR/uwe5622.log" make -j"$JOBS" package/kernel/uwe5622/compile V=s
-
-echo ">> Build image"
+echo ">> Build image (OpenWrt make reuses completed toolchain, kernel, and package outputs)"
 if ! make -j"$JOBS" > "$LOG_DIR/build.log" 2>&1; then
 	cat "$LOG_DIR/build.log"
 	if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
@@ -82,10 +83,15 @@ IMAGE_DIR="bin/targets/sunxi/cortexa53"
 test -d "$IMAGE_DIR"
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
-grep -q '\.img\.gz$' "$LOG_DIR/images.txt"
-find bin/targets/sunxi/cortexa53/packages -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print > "$LOG_DIR/uwe5622-packages.txt"
+grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
+: > "$LOG_DIR/uwe5622-packages.txt"
+for package_dir in "$IMAGE_DIR/packages" bin/packages; do
+	if [ -d "$package_dir" ]; then
+		find "$package_dir" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
+	fi
+done
 cat "$LOG_DIR/uwe5622-packages.txt"
-grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt"
-grep -q 'uwe5622-firmware' "$LOG_DIR/uwe5622-packages.txt"
+grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt" || { echo 'kmod-uwe5622 package was not generated' >&2; exit 1; }
+grep -q 'uwe5622-firmware' "$LOG_DIR/uwe5622-packages.txt" || { echo 'uwe5622-firmware package was not generated' >&2; exit 1; }
 
 echo "Build completed: $OW_DIR/$IMAGE_DIR"

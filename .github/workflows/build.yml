@@ -94,10 +94,15 @@ jobs:
           fi
           image_dir=bin/targets/sunxi/cortexa53
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
-          grep -q '\.img\.gz$' "$LOG_DIR/images.txt"
-          find "$image_dir/packages" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print > "$LOG_DIR/uwe5622-packages.txt"
-          grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt"
-          grep -q 'uwe5622-firmware' "$LOG_DIR/uwe5622-packages.txt"
+          grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated'; cat "$LOG_DIR/images.txt"; exit 1; }
+          : > "$LOG_DIR/uwe5622-packages.txt"
+          for package_dir in "$image_dir/packages" bin/packages; do
+            if [ -d "$package_dir" ]; then
+              find "$package_dir" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
+            fi
+          done
+          grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt" || { echo 'kmod-uwe5622 package was not generated'; cat "$LOG_DIR/uwe5622-packages.txt"; exit 1; }
+          grep -q 'uwe5622-firmware' "$LOG_DIR/uwe5622-packages.txt" || { echo 'uwe5622-firmware package was not generated'; cat "$LOG_DIR/uwe5622-packages.txt"; exit 1; }
 
       - name: Upload firmware images
         uses: actions/upload-artifact@v4
@@ -107,7 +112,8 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.img.gz
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.manifest
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/sha256sums
-            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/packages/*uwe5622*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/packages/kmod-uwe5622*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/uwe5622-firmware*.ipk
           if-no-files-found: error
 
       - name: Upload build diagnostics
