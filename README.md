@@ -18,8 +18,7 @@ overlay/
   target/linux/sunxi/base-files/etc/uci-defaults/99-opi3lts # br-lan/WAN network setup
   package/kernel/uwe5622/                                   # sprdwl_ng 驱动（含 OpenWrt backport 补丁）
   package/firmware/uwe5622-firmware/                        # UWE5622 固件
-  package/boot/uboot-sunxi/Makefile                         # 允许用预编译 U-Boot
-  package/boot/uboot-sunxi/prebuilt/xunlong_orangepi-3-lts-u-boot-with-spl.bin
+  package/boot/uboot-sunxi/                                 # 生成启动脚本并暂存 Orange Pi 3 LTS U-Boot
 ```
 
 ## 方案 A1 — GitHub Actions（推荐，零本机负担）
@@ -47,7 +46,7 @@ dd if=... .img of=/dev/sdX bs=1M conv=fsync    # sdX = SD 卡，别写错！
 ```
 
 镜像里已经：
-- 用**官方 U-Boot**（写入偏移 8KB / sector 16）；
+- 使用项目 U-Boot 包暂存的启动脚本和 bootloader（写入偏移 8KB / sector 16）；
 - 用**校准过的 DTS**（PMIC 走 r_i2c、Motorcomm PHY、rgmii-id、Wi-Fi SDIO 等）。
 
 ## 首次启动后的网络

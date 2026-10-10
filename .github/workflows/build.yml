@@ -49,8 +49,10 @@ jobs:
           CONFIG_TARGET_sunxi=y
           CONFIG_TARGET_sunxi_cortexa53=y
           CONFIG_TARGET_sunxi_cortexa53_DEVICE_xunlong_orangepi-3-lts=y
+          CONFIG_PACKAGE_u-boot-orangepi_3_lts=y
           EOF
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
+          grep -q '^CONFIG_PACKAGE_u-boot-orangepi_3_lts=y$' .config || { echo 'Orange Pi 3 LTS U-Boot package was not selected'; cat .config; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
 
       - name: Download sources

@@ -41,10 +41,16 @@ cat > .config <<EOF
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
+CONFIG_PACKAGE_u-boot-orangepi_3_lts=y
 EOF
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
+grep -q '^CONFIG_PACKAGE_u-boot-orangepi_3_lts=y$' .config || {
+	echo "Orange Pi 3 LTS U-Boot package was not selected" >&2
+	cat .config >&2
+	exit 1
+}
 cp .config "$LOG_DIR/openwrt.config"
 
 echo ">> Download sources"
