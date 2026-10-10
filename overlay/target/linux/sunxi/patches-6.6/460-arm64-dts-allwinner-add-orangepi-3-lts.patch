@@ -10,7 +10,7 @@
  dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h6-pine-h64.dtb
 --- a/arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-3-lts.dts
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-3-lts.dts
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,378 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Orange Pi 3 LTS (Allwinner H6)
@@ -39,6 +39,10 @@
 +
 +	aliases {
 +		ethernet0 = &emac;
++		ethernet1 = &aw859a;
++		mmc0 = &mmc0;
++		mmc1 = &mmc1;
++		mmc2 = &mmc2;
 +		serial0 = &uart0;
 +	};
 +
@@ -100,23 +104,13 @@
 +	};
 +
 +	reg_vcc33_wifi: vcc33-wifi {
-+		/* 3.3V rail for the Wi-Fi/BT module, gated by PH7 */
++		/* 3.3V rail for the Wi-Fi/BT module, enabled by PH7 */
 +		compatible = "regulator-fixed";
 +		regulator-name = "vcc33-wifi";
 +		regulator-min-microvolt = <3300000>;
 +		regulator-max-microvolt = <3300000>;
 +		enable-active-high;
 +		gpio = <&pio 7 7 GPIO_ACTIVE_HIGH>; /* PH7 */
-+	};
-+
-+	reg_vcc_wifi_io: vcc-wifi-io {
-+		/* 1.8V/300mA I/O rail for the Wi-Fi/BT module */
-+		compatible = "regulator-fixed";
-+		regulator-name = "vcc-wifi-io";
-+		regulator-min-microvolt = <1800000>;
-+		regulator-max-microvolt = <1800000>;
-+		regulator-always-on;
-+		vin-supply = <&reg_vcc33_wifi>;
 +	};
 +
 +	wifi_pwrseq: wifi-pwrseq {
@@ -196,12 +190,16 @@
 +
 +&mmc1 {
 +	vmmc-supply = <&reg_vcc33_wifi>;
-+	vqmmc-supply = <&reg_vcc_wifi_io>;
++	vqmmc-supply = <&reg_bldo3>;
 +	mmc-pwrseq = <&wifi_pwrseq>;
 +	bus-width = <4>;
 +	non-removable;
 +	max-frequency = <150000000>;
 +	status = "okay";
++
++	aw859a: wifi@1 {
++		reg = <1>;
++	};
 +};
 +
 +&mmc2 {
@@ -212,7 +210,6 @@
 +	bus-width = <8>;
 +	non-removable;
 +	cap-mmc-hw-reset;
-+	mmc-hs200-1_8v;
 +	status = "okay";
 +};
 +
@@ -227,7 +224,11 @@
 +&pio {
 +	vcc-pc-supply = <&reg_bldo2>;
 +	vcc-pd-supply = <&reg_cldo1>;
-+	vcc-pg-supply = <&reg_vcc_wifi_io>;
++	vcc-pg-supply = <&reg_bldo3>;
++};
++
++&r_pio {
++	vcc-pm-supply = <&reg_bldo3>;
 +};
 +
 +&pwm {

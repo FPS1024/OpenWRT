@@ -9,6 +9,7 @@ fi
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OW_DIR="$1"
 KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/config-6.6"
+CORTEXA53_KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/cortexa53/config-6.6"
 
 find "$HERE/overlay" -type f -print | while IFS= read -r source_file; do
 	relative_path=${source_file#"$HERE/overlay/"}
@@ -38,3 +39,13 @@ if ! grep -Fqx "$HWMON_DISABLED" "$KERNEL_CONFIG" || grep -q '^CONFIG_REALTEK_PH
 	sed -i '/^CONFIG_REALTEK_PHY_HWMON=/d; /^# CONFIG_REALTEK_PHY_HWMON is not set$/d' "$KERNEL_CONFIG"
 	printf '%s\n' "$HWMON_DISABLED" >> "$KERNEL_CONFIG"
 fi
+
+# The H6 RTC driver also registers the OSC32K_FANOUT clock provider used by
+# the Orange Pi 3 LTS Wi-Fi MMC power sequence. Without RTC_CLASS the provider
+# is omitted, leaving wifi-pwrseq deferred and preventing mmc1 from probing.
+for symbol in RTC_CLASS RTC_DRV_SUN6I; do
+	if ! grep -Fqx "CONFIG_${symbol}=y" "$CORTEXA53_KERNEL_CONFIG"; then
+		sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" "$CORTEXA53_KERNEL_CONFIG"
+		printf 'CONFIG_%s=y\n' "$symbol" >> "$CORTEXA53_KERNEL_CONFIG"
+	fi
+done

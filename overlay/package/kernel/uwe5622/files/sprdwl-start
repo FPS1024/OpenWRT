@@ -19,6 +19,10 @@ done
 [ -e /sys/class/ieee80211/phy0 ] || { log 'no cfg80211 phy appeared'; exit 1; }
 
 # wifi config ran at boot before the SDIO radio existed. Detect it now.
+new_radio=0
+if ! uci -q get wireless.radio0 >/dev/null; then
+	new_radio=1
+fi
 /sbin/wifi config || true
 if ! uci -q get wireless.radio0 >/dev/null; then
 	log 'radio0 was not generated after loading the driver'
@@ -42,9 +46,22 @@ set_default wireless.radio0.country CN
 set_default wireless.default_radio0.device radio0
 set_default wireless.default_radio0.mode ap
 set_default wireless.default_radio0.network lan
-set_default wireless.default_radio0.ssid OpenWrt-3LTS
+set_default wireless.default_radio0.ssid OrangePi-3-LTS
 set_default wireless.default_radio0.encryption psk2
-if [ "$new_ap" -eq 1 ]; then
+
+# Use known, broadly compatible defaults only when creating a fresh radio.
+# Existing wireless settings remain user-controlled across subsequent boots.
+if [ "$new_radio" -eq 1 ]; then
+	uci set wireless.radio0.band=2g
+	uci set wireless.radio0.channel=6
+	uci set wireless.radio0.htmode=HT20
+	uci set wireless.radio0.disabled=0
+	uci set wireless.default_radio0.ssid=OrangePi-3-LTS
+	uci set wireless.default_radio0.mode=ap
+	uci set wireless.default_radio0.network=lan
+	uci set wireless.default_radio0.encryption=psk2
+	uci set wireless.default_radio0.key='orangepi@7'
+elif [ "$new_ap" -eq 1 ]; then
 	uci set wireless.radio0.disabled=0
 fi
 uci commit wireless
@@ -56,7 +73,7 @@ if [ -z "$key" ]; then
 	uci commit wireless
 fi
 
-# Keep a copy so the owner can retrieve the unique first-boot password over
+# Keep a copy so the owner can retrieve the configured AP password over
 # the serial console or a wired root session. Never print it to system logs.
 mkdir -p /root
 umask 077

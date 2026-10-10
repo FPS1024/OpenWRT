@@ -61,11 +61,24 @@ dd if=... .img of=/dev/sdX bs=1M conv=fsync    # sdX = SD 卡，别写错！
 ## 首次启动后的网络
 
 - `eth0` = **WAN**（DHCP，插网线）
-- `br-lan` = **192.168.8.1**，Wi-Fi AP `OpenWrt-3LTS`
+- `br-lan` = **192.168.8.1**，Wi-Fi 客户端默认从 `192.168.8.100` 起通过 DHCP 获取地址
+- Wi-Fi 默认开启 **2.4 GHz / 信道 6 / HT20**，SSID `OrangePi-3-LTS`，WPA2-PSK 密码 `orangepi@7`
+- 内置 LuCI 和 uhttpd，连上 Wi-Fi 后可访问 `http://192.168.8.1` 管理路由器
 
-首次启动后会生成随机 Wi-Fi 密码，保存在设备 `/root/opi3lts-wifi-password`（权限为仅 root 可读）。
-可通过串口控制台读取。SSID 默认是 `OpenWrt-3LTS`；之后可通过 `uci` 修改，
-启动脚本只补全缺失的无线设置，不覆盖已有配置。默认不创建 monitor 虚拟接口。
+上述 Wi-Fi 密码是所有用户共用的公开默认值。部署后建议尽快换成自己的密码。设备不会设置固定的 root 管理密码；首次通过串口登录后运行 `passwd` 设置。
+设置 root 密码后，再登录 LuCI；LuCI 使用 root 管理员账号。
+
+用户可以随时通过 UCI 修改无线名称、密码和 2.4 GHz 信道，例如：
+
+```sh
+uci set wireless.default_radio0.ssid='自己的 Wi-Fi 名称'
+uci set wireless.default_radio0.key='自己的 Wi-Fi 密码'
+uci set wireless.radio0.channel='11'
+uci commit wireless
+wifi reload
+```
+
+首次启动时，驱动启动脚本会创建上述默认 AP；已有无线配置会保留，不会在之后每次启动时覆盖用户设置。默认不创建 monitor 虚拟接口。
 
 ## 设备树说明
 
