@@ -434,6 +434,7 @@ UBOOT_TARGETS := \
 	orangepi_pc2 \
 	orangepi_zero2 \
 	orangepi_zero3 \
+	orangepi_3_lts \
 	pangolin \
 	pine64_plus \
 	Sinovoip_BPI_M3 \
