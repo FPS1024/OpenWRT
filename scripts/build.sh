@@ -60,7 +60,22 @@ echo ">> Compile UWE5622 kernel package first"
 run_logged "$LOG_DIR/uwe5622.log" make -j"$JOBS" package/kernel/uwe5622/compile V=s
 
 echo ">> Build image"
-run_logged "$LOG_DIR/build.log" make -j"$JOBS"
+if ! make -j"$JOBS" > "$LOG_DIR/build.log" 2>&1; then
+	cat "$LOG_DIR/build.log"
+	if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
+		df -h > "$LOG_DIR/disk-after-build-failure.txt"
+		df -i >> "$LOG_DIR/disk-after-build-failure.txt"
+		echo ">> Retry target/linux/install serially with verbose output"
+		if ! make -j1 V=s target/linux/install > "$LOG_DIR/target-linux-install.log" 2>&1; then
+			cat "$LOG_DIR/target-linux-install.log"
+			exit 1
+		fi
+		echo ">> Verbose target install passed; resume full image build"
+		run_logged "$LOG_DIR/build-retry.log" make -j"$JOBS"
+	else
+		exit 1
+	fi
+fi
 
 echo ">> Verify expected image and driver packages exist"
 IMAGE_DIR="bin/targets/sunxi/cortexa53"

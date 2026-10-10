@@ -76,7 +76,22 @@ jobs:
       - name: Build firmware image
         run: |
           cd "$OPENWRT_DIR"
-          make -j"$(nproc)" > "$LOG_DIR/build.log" 2>&1 || { cat "$LOG_DIR/build.log"; exit 1; }
+          if ! make -j"$(nproc)" > "$LOG_DIR/build.log" 2>&1; then
+            cat "$LOG_DIR/build.log"
+            if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
+              df -h > "$LOG_DIR/disk-after-build-failure.txt"
+              df -i >> "$LOG_DIR/disk-after-build-failure.txt"
+              echo "Retrying target/linux/install serially with verbose output for diagnosis"
+              if ! make -j1 V=s target/linux/install > "$LOG_DIR/target-linux-install.log" 2>&1; then
+                cat "$LOG_DIR/target-linux-install.log"
+                exit 1
+              fi
+              echo "Verbose target install passed; resuming full firmware build"
+              make -j"$(nproc)" > "$LOG_DIR/build-retry.log" 2>&1 || { cat "$LOG_DIR/build-retry.log"; exit 1; }
+            else
+              exit 1
+            fi
+          fi
           image_dir=bin/targets/sunxi/cortexa53
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
           grep -q '\.img\.gz$' "$LOG_DIR/images.txt"
