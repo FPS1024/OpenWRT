@@ -1,0 +1,94 @@
+name: Build OpenWrt for Orange Pi 3 LTS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  OW_COMMIT: 58584c6f2829a7e5d77376ab68aae3dcc4a392d8
+  OPENWRT_DIR: ${{ github.workspace }}/.work/openwrt
+  LOG_DIR: ${{ github.workspace }}/_logs
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Clone pinned OpenWrt source
+        run: |
+          mkdir -p "$(dirname "$OPENWRT_DIR")"
+          git clone --no-checkout https://github.com/openwrt/openwrt.git "$OPENWRT_DIR"
+          git -C "$OPENWRT_DIR" fetch --depth 1 origin "$OW_COMMIT"
+          git -C "$OPENWRT_DIR" checkout --detach "$OW_COMMIT"
+          git -C "$OPENWRT_DIR" rev-parse HEAD
+
+      - name: Cache OpenWrt source downloads
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENWRT_DIR }}/dl
+          key: openwrt-dl-${{ env.OW_COMMIT }}
+          restore-keys: openwrt-dl-
+
+      - name: Apply overlay and configure
+        run: |
+          mkdir -p "$LOG_DIR"
+          cp -a overlay/. "$OPENWRT_DIR/"
+          cd "$OPENWRT_DIR"
+          cat > .config <<'EOF'
+          CONFIG_TARGET_sunxi=y
+          CONFIG_TARGET_sunxi_cortexa53=y
+          CONFIG_TARGET_sunxi_cortexa53_DEVICE_xunlong_orangepi-3-lts=y
+          EOF
+          make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
+          cp .config "$LOG_DIR/openwrt.config"
+
+      - name: Download sources
+        run: |
+          cd "$OPENWRT_DIR"
+          make -j"$(nproc)" download > "$LOG_DIR/download.log" 2>&1 || { cat "$LOG_DIR/download.log"; exit 1; }
+
+      - name: Compile UWE5622 driver package
+        run: |
+          cd "$OPENWRT_DIR"
+          make -j"$(nproc)" package/kernel/uwe5622/compile V=s > "$LOG_DIR/uwe5622.log" 2>&1 || { cat "$LOG_DIR/uwe5622.log"; exit 1; }
+
+      - name: Build firmware image
+        run: |
+          cd "$OPENWRT_DIR"
+          make -j"$(nproc)" > "$LOG_DIR/build.log" 2>&1 || { cat "$LOG_DIR/build.log"; exit 1; }
+          image_dir=bin/targets/sunxi/cortexa53
+          find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
+          grep -q '\.img\.gz$' "$LOG_DIR/images.txt"
+          find "$image_dir/packages" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print > "$LOG_DIR/uwe5622-packages.txt"
+          grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt"
+          grep -q 'uwe5622-firmware' "$LOG_DIR/uwe5622-packages.txt"
+
+      - name: Upload firmware images
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-opi3lts
+          path: |
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.img.gz
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.manifest
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/sha256sums
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/packages/*uwe5622*.ipk
+          if-no-files-found: error
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-diagnostics
+          path: ${{ env.LOG_DIR }}/
+          if-no-files-found: warn

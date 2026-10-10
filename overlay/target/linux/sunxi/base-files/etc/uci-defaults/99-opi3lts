@@ -1,0 +1,37 @@
+#!/bin/sh
+#
+# Orange Pi 3 LTS (Allwinner H6) — default network topology for a
+# Wi-Fi AP router:
+#
+#   eth0    -> WAN  (DHCP client; plug into your existing router/modem)
+#   br-lan  -> LAN  (192.168.8.1, DHCP server)
+#   radio0  -> AP on LAN
+#
+# This runs before the delayed UWE5622 driver load. Wireless configuration is
+# therefore created by sprdwl-start after the radio has been detected.
+
+. /lib/functions.sh
+
+[ "$(board_name)" = "xunlong,orangepi-3-lts" ] || exit 0
+
+# ---------------- network ----------------
+uci -q batch <<-EOF
+	delete network.@device[0]
+	delete network.wan
+	delete network.wan6
+	set network.wan=interface
+	set network.wan.device='eth0'
+	set network.wan.proto='dhcp'
+	set network.lan=interface
+	set network.lan.device='br-lan'
+	set network.lan.proto='static'
+	set network.lan.ipaddr='192.168.8.1'
+	set network.lan.netmask='255.255.255.0'
+	set network.lan.ip6assign='60'
+	add network device
+	set network.@device[-1].name='br-lan'
+	set network.@device[-1].type='bridge'
+	commit network
+EOF
+
+exit 0

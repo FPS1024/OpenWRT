@@ -1,0 +1,5 @@
+# OpenWrt source/build tree is fetched by scripts/build.sh, never committed.
+/ow/
+/.work/
+/_logs/
+

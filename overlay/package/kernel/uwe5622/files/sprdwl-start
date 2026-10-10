@@ -1,0 +1,66 @@
+#!/bin/sh
+
+set -eu
+
+log() {
+	logger -t sprdwl-start "$*"
+}
+
+sleep 15
+modprobe uwe5622_bsp_sdio || { log 'failed to load uwe5622_bsp_sdio'; exit 1; }
+sleep 5
+modprobe sprdwl_ng || { log 'failed to load sprdwl_ng'; exit 1; }
+
+i=0
+while [ ! -e /sys/class/ieee80211/phy0 ] && [ "$i" -lt 30 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+[ -e /sys/class/ieee80211/phy0 ] || { log 'no cfg80211 phy appeared'; exit 1; }
+
+# wifi config ran at boot before the SDIO radio existed. Detect it now.
+/sbin/wifi config || true
+if ! uci -q get wireless.radio0 >/dev/null; then
+	log 'radio0 was not generated after loading the driver'
+	exit 1
+fi
+
+new_ap=0
+if ! uci -q get wireless.default_radio0 >/dev/null; then
+	uci set wireless.default_radio0=wifi-iface
+	new_ap=1
+fi
+
+set_default() {
+	name="$1"
+	value="$2"
+	current="$(uci -q get "$name" || true)"
+	[ -n "$current" ] || uci set "$name=$value"
+}
+
+set_default wireless.radio0.country CN
+set_default wireless.default_radio0.device radio0
+set_default wireless.default_radio0.mode ap
+set_default wireless.default_radio0.network lan
+set_default wireless.default_radio0.ssid OpenWrt-3LTS
+set_default wireless.default_radio0.encryption psk2
+if [ "$new_ap" -eq 1 ]; then
+	uci set wireless.radio0.disabled=0
+fi
+uci commit wireless
+
+key="$(uci -q get wireless.default_radio0.key || true)"
+if [ -z "$key" ]; then
+	key="$(dd if=/dev/urandom bs=16 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')"
+	uci set wireless.default_radio0.key="$key"
+	uci commit wireless
+fi
+
+# Keep a copy so the owner can retrieve the unique first-boot password over
+# the serial console or a wired root session. Never print it to system logs.
+mkdir -p /root
+umask 077
+printf '%s\n' "$key" > /root/opi3lts-wifi-password
+
+/sbin/wifi up radio0
+log 'AP configured on radio0; password saved in /root/opi3lts-wifi-password'
