@@ -43,7 +43,7 @@ jobs:
       - name: Apply overlay and configure
         run: |
           mkdir -p "$LOG_DIR"
-          cp -a overlay/. "$OPENWRT_DIR/"
+          sh scripts/apply-overlay.sh "$OPENWRT_DIR"
           cd "$OPENWRT_DIR"
           cat > .config <<'EOF'
           CONFIG_TARGET_sunxi=y
@@ -66,7 +66,7 @@ jobs:
       - name: Compile target kernel
         run: |
           cd "$OPENWRT_DIR"
-          make -j1 V=s target/linux/compile > "$LOG_DIR/kernel.log" 2>&1 || { cat "$LOG_DIR/kernel.log"; exit 1; }
+          make -j"$(nproc)" target/linux/compile > "$LOG_DIR/kernel.log" 2>&1 || { cat "$LOG_DIR/kernel.log"; exit 1; }
 
       - name: Compile UWE5622 driver package
         run: |
