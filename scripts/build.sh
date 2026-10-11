@@ -77,6 +77,7 @@ CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
+CONFIG_LUCI_LANG_zh_Hans=y
 CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
@@ -93,6 +94,7 @@ for symbol in \
 	PACKAGE_uhttpd-mod-ubus \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
+	LUCI_LANG_zh_Hans \
 	PACKAGE_luci-i18n-argon-config-zh-cn \
 	PACKAGE_luci-i18n-base-zh-cn \
 	PACKAGE_luci-i18n-firewall-zh-cn \
@@ -105,6 +107,8 @@ echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
+grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
+grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
