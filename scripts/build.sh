@@ -56,6 +56,11 @@ echo ">> Update and install LuCI package feeds"
 run_logged "$LOG_DIR/feeds-update.log" ./scripts/feeds update packages luci
 run_logged "$LOG_DIR/feeds-install-packages.log" ./scripts/feeds install -a -p packages
 run_logged "$LOG_DIR/feeds-install-luci.log" ./scripts/feeds install -a -p luci
+if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1; then
+	cat "$LOG_DIR/argon-sources.txt"
+	exit 1
+fi
+cat "$LOG_DIR/argon-sources.txt"
 
 if [ ! -s .config ] \
 	|| ! grep -qx 'CONFIG_TARGET_sunxi=y' .config \
@@ -65,21 +70,41 @@ if [ ! -s .config ] \
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
+CONFIG_PER_FEED_REPO=y
+CONFIG_FEED_luci=y
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_luci-theme-argon=y
+CONFIG_PACKAGE_luci-app-argon-config=y
+CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
+CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
+CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
 EOF
 fi
 
 # Keep the web UI selected in an existing incremental build tree too.
-for symbol in luci uhttpd uhttpd-mod-ubus; do
-	sed -i "/^CONFIG_PACKAGE_${symbol}=/d; /^# CONFIG_PACKAGE_${symbol} is not set$/d" .config
-	printf 'CONFIG_PACKAGE_%s=y\n' "$symbol" >> .config
+for symbol in \
+	PER_FEED_REPO \
+	FEED_luci \
+	PACKAGE_luci \
+	PACKAGE_uhttpd \
+	PACKAGE_uhttpd-mod-ubus \
+	PACKAGE_luci-theme-argon \
+	PACKAGE_luci-app-argon-config \
+	PACKAGE_luci-i18n-argon-config-zh-cn \
+	PACKAGE_luci-i18n-base-zh-cn \
+	PACKAGE_luci-i18n-firewall-zh-cn \
+	PACKAGE_luci-i18n-package-manager-zh-cn; do
+	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
+	printf 'CONFIG_%s=y\n' "$symbol" >> .config
 done
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
+grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
@@ -105,7 +130,11 @@ IMAGE_DIR="bin/targets/sunxi/cortexa53"
 test -d "$IMAGE_DIR"
 MANIFEST="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}.manifest"
 test -s "$MANIFEST" || { echo "Image manifest is missing: $MANIFEST" >&2; exit 1; }
-for package in luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus; do
+for package in \
+	luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
+	luci-theme-argon luci-app-argon-config \
+	luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
+	luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Expected web-admin package is missing: $package" >&2; exit 1; }
 done
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"

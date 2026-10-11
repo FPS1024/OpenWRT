@@ -47,4 +47,11 @@ uci -q batch <<-EOF
 	commit dhcp
 EOF
 
+# Start LuCI in Simplified Chinese. The installed language packages remain
+# selectable later from System -> System -> Language and Style.
+if [ -f /etc/config/luci ]; then
+	uci -q set luci.main.lang='zh_cn'
+	uci -q commit luci
+fi
+
 exit 0
