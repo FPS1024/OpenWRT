@@ -71,10 +71,12 @@ CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
 CONFIG_PER_FEED_REPO=y
+CONFIG_FEED_packages=y
 CONFIG_FEED_luci=y
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -88,10 +90,12 @@ fi
 # Keep the web UI selected in an existing incremental build tree too.
 for symbol in \
 	PER_FEED_REPO \
+	FEED_packages \
 	FEED_luci \
 	PACKAGE_luci \
 	PACKAGE_uhttpd \
 	PACKAGE_uhttpd-mod-ubus \
+	PACKAGE_kmod-tun \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -106,6 +110,7 @@ done
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
+grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
@@ -144,6 +149,7 @@ done
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
+grep -q '^kmod-tun ' "$MANIFEST" || { echo 'Kernel-matched kmod-tun package is missing from the image' >&2; exit 1; }
 : > "$LOG_DIR/uwe5622-packages.txt"
 for package_dir in "$IMAGE_DIR/packages" bin/packages; do
 	if [ -d "$package_dir" ]; then

@@ -8,7 +8,8 @@
 #   radio0  -> AP on LAN
 #
 # This runs before the delayed UWE5622 driver load. Wireless configuration is
-# therefore created by sprdwl-start after the radio has been detected.
+# seeded here so the generic ieee80211 hotplug detector cannot create an
+# OpenWrt/unencrypted radio config before sprdwl-start runs.
 
 . /lib/functions.sh
 
@@ -45,6 +46,29 @@ uci -q batch <<-EOF
 	set dhcp.lan.leasetime='12h'
 	set dhcp.lan.dhcpv4='server'
 	commit dhcp
+EOF
+
+# Seed the factory AP before the SDIO driver appears. The ieee80211 hotplug
+# handler runs `wifi config` as soon as phy0 is registered; if it wins the
+# race, it creates a generic OpenWrt SSID and the driver helper cannot tell
+# that this is a fresh install from a user-configured AP.
+uci -q batch <<-EOF
+	set wireless.radio0=wifi-device
+	set wireless.radio0.type='mac80211'
+	set wireless.radio0.path='platform/unisoc_wifi'
+	set wireless.radio0.band='2g'
+	set wireless.radio0.channel='6'
+	set wireless.radio0.htmode='HT20'
+	set wireless.radio0.country='CN'
+	set wireless.radio0.disabled='0'
+	set wireless.default_radio0=wifi-iface
+	set wireless.default_radio0.device='radio0'
+	set wireless.default_radio0.network='lan'
+	set wireless.default_radio0.mode='ap'
+	set wireless.default_radio0.ssid='OrangePi-3-LTS'
+	set wireless.default_radio0.encryption='psk2'
+	set wireless.default_radio0.key='orangepi@7'
+	commit wireless
 EOF
 
 # Start LuCI in Simplified Chinese. The installed language packages remain
