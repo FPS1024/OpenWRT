@@ -70,6 +70,16 @@ jobs:
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+          CONFIG_PACKAGE_dnsmasq-full=y
+          CONFIG_PACKAGE_libnettle=y
+          CONFIG_PACKAGE_libnetfilter-conntrack=y
+          CONFIG_PACKAGE_bash=y
+          CONFIG_PACKAGE_curl=y
+          CONFIG_PACKAGE_ca-bundle=y
+          CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_ruby=y
+          CONFIG_PACKAGE_ruby-yaml=y
+          CONFIG_PACKAGE_unzip=y
           CONFIG_PACKAGE_luci-theme-argon=y
           CONFIG_PACKAGE_luci-app-argon-config=y
           CONFIG_LUCI_LANG_zh_Hans=y
@@ -136,6 +146,8 @@ jobs:
           test -s "$manifest" || { echo "Image manifest is missing: $manifest"; exit 1; }
           for package in \
             luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
+            dnsmasq-full libnettle8 libnetfilter-conntrack3 \
+            bash curl ca-bundle ip-full ruby ruby-yaml unzip \
             luci-theme-argon luci-app-argon-config \
             luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
             luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do

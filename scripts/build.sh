@@ -81,6 +81,16 @@ CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
 CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+CONFIG_PACKAGE_dnsmasq-full=y
+CONFIG_PACKAGE_libnettle=y
+CONFIG_PACKAGE_libnetfilter-conntrack=y
+CONFIG_PACKAGE_bash=y
+CONFIG_PACKAGE_curl=y
+CONFIG_PACKAGE_ca-bundle=y
+CONFIG_PACKAGE_ip-full=y
+CONFIG_PACKAGE_ruby=y
+CONFIG_PACKAGE_ruby-yaml=y
+CONFIG_PACKAGE_unzip=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -104,6 +114,16 @@ for symbol in \
 	PACKAGE_kmod-inet-diag \
 	PACKAGE_kmod-nft-tproxy \
 	PACKAGE_kmod-nf-conntrack-netlink \
+	PACKAGE_dnsmasq-full \
+	PACKAGE_libnettle \
+	PACKAGE_libnetfilter-conntrack \
+	PACKAGE_bash \
+	PACKAGE_curl \
+	PACKAGE_ca-bundle \
+	PACKAGE_ip-full \
+	PACKAGE_ruby \
+	PACKAGE_ruby-yaml \
+	PACKAGE_unzip \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -149,6 +169,8 @@ MANIFEST="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}.manifest"
 test -s "$MANIFEST" || { echo "Image manifest is missing: $MANIFEST" >&2; exit 1; }
 for package in \
 	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
+	dnsmasq-full libnettle8 libnetfilter-conntrack3 \
+	bash curl ca-bundle ip-full ruby ruby-yaml unzip \
 	luci-theme-argon luci-app-argon-config \
 	luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
 	luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
