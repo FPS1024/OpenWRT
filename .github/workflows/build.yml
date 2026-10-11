@@ -47,7 +47,7 @@ jobs:
           ./scripts/feeds update packages luci > "$LOG_DIR/feeds-update.log" 2>&1 || { cat "$LOG_DIR/feeds-update.log"; exit 1; }
           ./scripts/feeds install -a -p packages > "$LOG_DIR/feeds-install-packages.log" 2>&1 || { cat "$LOG_DIR/feeds-install-packages.log"; exit 1; }
           ./scripts/feeds install -a -p luci > "$LOG_DIR/feeds-install-luci.log" 2>&1 || { cat "$LOG_DIR/feeds-install-luci.log"; exit 1; }
-          sh scripts/prepare-argon.sh "$OPENWRT_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1 || { cat "$LOG_DIR/argon-sources.txt"; exit 1; }
+          sh "$GITHUB_WORKSPACE/scripts/prepare-argon.sh" "$OPENWRT_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1 || { cat "$LOG_DIR/argon-sources.txt"; exit 1; }
           cat "$LOG_DIR/argon-sources.txt"
 
       - name: Apply overlay and configure
