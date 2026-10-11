@@ -80,6 +80,7 @@ CONFIG_PACKAGE_luci-compat=y
 CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
+CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -102,6 +103,7 @@ for symbol in \
 	PACKAGE_kmod-tun \
 	PACKAGE_kmod-inet-diag \
 	PACKAGE_kmod-nft-tproxy \
+	PACKAGE_kmod-nf-conntrack-netlink \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -155,7 +157,7 @@ done
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
-for package in kmod-tun kmod-inet-diag kmod-nft-tproxy; do
+for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Kernel-matched ${package} package is missing from the image" >&2; exit 1; }
 done
 : > "$LOG_DIR/uwe5622-packages.txt"
