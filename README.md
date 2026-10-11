@@ -31,7 +31,7 @@ OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 
 也可推送到 `main` 或在 GitHub Actions 手动运行 **Build OpenWrt for Orange Pi 3 LTS**。成功后打开该次 workflow run 页面底部的 **Artifacts**，下载 `openwrt-opi3lts`。压缩包包含刷机镜像、manifest、校验文件和 Wi-Fi 驱动包；构建日志在单独的 `build-diagnostics` artifact 中。本地和 CI 的镜像位于 `bin/targets/sunxi/cortexa53/`，包含 ext4 与 squashfs SD 卡镜像。
 
-固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`kmod-tun` 也随镜像构建，以保证需要 TUN 的软件使用与当前内核匹配的模块。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。刷机后先运行 `opkg update`，再安装额外软件。需要 `dnsmasq-full` 的软件可能要求先将固件自带的 `dnsmasq` 替换成 `dnsmasq-full`。
+固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`luci-compat`、`kmod-tun`、`kmod-inet-diag` 和 `kmod-nft-tproxy` 随镜像构建，确保 LuCI 兼容层及需要的内核模块与当前内核匹配。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。刷机后先运行 `opkg update`，再安装额外软件。需要 `dnsmasq-full` 的软件可能要求先将固件自带的 `dnsmasq` 替换成 `dnsmasq-full`。
 
 ## 刷写
 

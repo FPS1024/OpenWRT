@@ -76,7 +76,10 @@ CONFIG_FEED_luci=y
 CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
+CONFIG_PACKAGE_luci-compat=y
 CONFIG_PACKAGE_kmod-tun=y
+CONFIG_PACKAGE_kmod-inet-diag=y
+CONFIG_PACKAGE_kmod-nft-tproxy=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -95,7 +98,10 @@ for symbol in \
 	PACKAGE_luci \
 	PACKAGE_uhttpd \
 	PACKAGE_uhttpd-mod-ubus \
+	PACKAGE_luci-compat \
 	PACKAGE_kmod-tun \
+	PACKAGE_kmod-inet-diag \
+	PACKAGE_kmod-nft-tproxy \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -140,7 +146,7 @@ test -d "$IMAGE_DIR"
 MANIFEST="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}.manifest"
 test -s "$MANIFEST" || { echo "Image manifest is missing: $MANIFEST" >&2; exit 1; }
 for package in \
-	luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
+	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
 	luci-theme-argon luci-app-argon-config \
 	luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
 	luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
@@ -149,7 +155,9 @@ done
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
-grep -q '^kmod-tun ' "$MANIFEST" || { echo 'Kernel-matched kmod-tun package is missing from the image' >&2; exit 1; }
+for package in kmod-tun kmod-inet-diag kmod-nft-tproxy; do
+	grep -q "^${package} " "$MANIFEST" || { echo "Kernel-matched ${package} package is missing from the image" >&2; exit 1; }
+done
 : > "$LOG_DIR/uwe5622-packages.txt"
 for package_dir in "$IMAGE_DIR/packages" bin/packages; do
 	if [ -d "$package_dir" ]; then
