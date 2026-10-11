@@ -50,8 +50,8 @@ sudo dd if=openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img \
 可在 LuCI 的 **Network → Wireless** 修改，也可通过 SSH/串口使用 UCI：
 
 ```sh
-uci set wireless.default_radio0.ssid='自己的名称'
-uci set wireless.default_radio0.key='自己的至少八位密码'
+uci set wireless.default_radio0.ssid='SSID'
+uci set wireless.default_radio0.key='password'
 uci commit wireless
 wifi reload
 ```
