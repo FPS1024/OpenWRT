@@ -12,7 +12,6 @@ LOG_DIR="${LOG_DIR:-$HERE/_logs}"
 
 mkdir -p "$(dirname "$OW_DIR")" "$LOG_DIR"
 export FORCE_UNSAFE_CONFIGURE=1
-export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 
 run_logged() {
 	_run_log_file="$1"
@@ -32,6 +31,30 @@ run_logged() {
 	_run_logged_status=$(cat "$_run_status_file")
 	rm -f "$_run_status_file"
 	return "$_run_logged_status"
+}
+
+# Some local sandboxes reject the Unix socket used by the fakeroot binary
+# built by OpenWrt.  A system fakeroot can still create the package archives;
+# use it only when the OpenWrt host helper fails its harmless probe.
+prepare_fakeroot() {
+	_fakeroot_bin="$OW_DIR/staging_dir/host/bin/fakeroot"
+	if [ ! -x "$_fakeroot_bin" ] || "$_fakeroot_bin" true >/dev/null 2>&1; then
+		return 0
+	fi
+	if [ -x /usr/bin/fakeroot ]; then
+		if [ ! -e "$_fakeroot_bin.openwrt" ]; then
+			cp -p "$_fakeroot_bin" "$_fakeroot_bin.openwrt"
+		fi
+		cat > "$_fakeroot_bin" <<'EOF'
+#!/bin/sh
+exec /usr/bin/fakeroot "$@"
+EOF
+		chmod 0755 "$_fakeroot_bin"
+		echo "Using /usr/bin/fakeroot because the OpenWrt host fakeroot cannot create its daemon socket"
+		return 0
+	fi
+	echo "OpenWrt fakeroot cannot create its daemon socket and /usr/bin/fakeroot is unavailable" >&2
+	return 1
 }
 
 if [ ! -d "$OW_DIR/.git" ]; then
@@ -78,7 +101,6 @@ CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
 CONFIG_DEVEL=y
-CONFIG_CCACHE=y
 CONFIG_PER_FEED_REPO=y
 CONFIG_FEED_packages=y
 CONFIG_FEED_luci=y
@@ -148,7 +170,6 @@ fi
 for symbol in \
 	PER_FEED_REPO \
 	DEVEL \
-	CCACHE \
 	FEED_packages \
 	FEED_luci \
 	PACKAGE_luci \
@@ -189,7 +210,9 @@ if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 		printf 'CONFIG_%s=y\n' "$symbol" >> .config
 	done
 else
-	for symbol in PACKAGE_git PACKAGE_git-http PACKAGE_make PACKAGE_gcc PACKAGE_binutils; do
+	# Clear transitive binutils selections left by an earlier dev-tool build.
+	# defconfig can leave these orphaned package symbols enabled.
+	for symbol in PACKAGE_git PACKAGE_git-http PACKAGE_make PACKAGE_gcc PACKAGE_binutils PACKAGE_ar PACKAGE_objdump PACKAGE_libbfd PACKAGE_libctf PACKAGE_libopcodes; do
 		sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
 		printf '# CONFIG_%s is not set\n' "$symbol" >> .config
 	done
@@ -200,6 +223,9 @@ fi
 # dnsmasq-full.
 sed -i '/^CONFIG_PACKAGE_dnsmasq=y$/d; /^# CONFIG_PACKAGE_dnsmasq is not set$/d' .config
 printf '%s\n' '# CONFIG_PACKAGE_dnsmasq is not set' >> .config
+# Do not let an older incremental tree force the optional ccache host tool.
+sed -i '/^CONFIG_CCACHE=y$/d; /^# CONFIG_CCACHE is not set$/d' .config
+printf '%s\n' '# CONFIG_CCACHE is not set' >> .config
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
@@ -214,6 +240,8 @@ fi
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
+
+prepare_fakeroot
 
 disable_openclash() {
 	rm -rf package/luci-app-openclash-prebuilt

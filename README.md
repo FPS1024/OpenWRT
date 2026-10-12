@@ -31,7 +31,7 @@ OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 
 也可推送到 `main` 或在 GitHub Actions 手动运行 **Build OpenWrt for Orange Pi 3 LTS**。成功后打开该次 workflow run 页面底部的 **Artifacts**，下载 `openwrt-opi3lts`。压缩包包含刷机镜像、manifest、校验文件和 Wi-Fi 驱动包；构建日志在单独的 `build-diagnostics` artifact 中。本地和 CI 的镜像位于 `bin/targets/sunxi/cortexa53/`，包含 ext4 与 squashfs SD 卡镜像。
 
-Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，因此不会为开发工具付出额外的长时间编译。手动运行 workflow 时把 `include_dev_tools` 设为 true，或本地使用 `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh`，才会把这批工具放进固件。构建启用了 ccache，Actions 会缓存编译对象；本地构建目录也会保留 `.ccache`。构建日志按 `package-compile`、`package-install`、`target-install` 和 `package-index` 分阶段保存；其中 `target-install` 是实际制作镜像的短阶段。
+Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，因此不会为开发工具付出额外的长时间编译。手动运行 workflow 时把 `include_dev_tools` 设为 true，或本地使用 `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh`，才会把这批工具放进固件。构建日志按 `package-compile`、`package-install`、`target-install` 和 `package-index` 分阶段保存；其中 `target-install` 是实际制作镜像的短阶段。
 
 固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 常用的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
 

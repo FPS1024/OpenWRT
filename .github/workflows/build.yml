@@ -18,7 +18,6 @@ env:
   OW_COMMIT: 58584c6f2829a7e5d77376ab68aae3dcc4a392d8
   OPENWRT_DIR: ${{ github.workspace }}/.work/openwrt
   LOG_DIR: ${{ github.workspace }}/_logs
-  CCACHE_MAXSIZE: 2G
 
 jobs:
   build:
@@ -49,14 +48,6 @@ jobs:
           key: openwrt-dl-${{ env.OW_COMMIT }}
           restore-keys: openwrt-dl-
 
-      - name: Cache compiler objects
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.OPENWRT_DIR }}/.ccache
-          key: openwrt-ccache-${{ env.OW_COMMIT }}-${{ hashFiles('overlay/**', 'scripts/**', '.github/workflows/build.yml') }}-${{ inputs.include_dev_tools || 'runtime' }}
-          restore-keys: |
-            openwrt-ccache-${{ env.OW_COMMIT }}-
-
       - name: Update and install LuCI package feeds
         run: |
           mkdir -p "$LOG_DIR"
@@ -79,7 +70,6 @@ jobs:
           CONFIG_TARGET_sunxi_cortexa53=y
           CONFIG_TARGET_sunxi_cortexa53_DEVICE_xunlong_orangepi-3-lts=y
           CONFIG_DEVEL=y
-          CONFIG_CCACHE=y
           CONFIG_PER_FEED_REPO=y
           CONFIG_FEED_packages=y
           CONFIG_FEED_luci=y
@@ -132,6 +122,11 @@ jobs:
           # CONFIG_PACKAGE_make is not set
           # CONFIG_PACKAGE_gcc is not set
           # CONFIG_PACKAGE_binutils is not set
+          # CONFIG_PACKAGE_ar is not set
+          # CONFIG_PACKAGE_objdump is not set
+          # CONFIG_PACKAGE_libbfd is not set
+          # CONFIG_PACKAGE_libctf is not set
+          # CONFIG_PACKAGE_libopcodes is not set
           EOF
           fi
           if [ -f "$OPENWRT_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
@@ -212,6 +207,16 @@ jobs:
             # line must never trigger a second full build.
             grep -Eq 'ERROR: package/luci-app-openclash-prebuilt failed|package/luci-app-openclash-prebuilt/[^ ]*.*Error [1-9]|luci-app-openclash-prebuilt.*failed' "$1"
           }
+          fakeroot_bin="$OPENWRT_DIR/staging_dir/host/bin/fakeroot"
+          if [ -x "$fakeroot_bin" ] && ! "$fakeroot_bin" true >/dev/null 2>&1 && [ -x /usr/bin/fakeroot ]; then
+            cp -p "$fakeroot_bin" "$fakeroot_bin.openwrt" 2>/dev/null || true
+            cat > "$fakeroot_bin" <<'EOF'
+          #!/bin/sh
+          exec /usr/bin/fakeroot "$@"
+          EOF
+            chmod 0755 "$fakeroot_bin"
+            echo 'Using system fakeroot because the OpenWrt host helper failed its socket probe'
+          fi
           if ! stage package-compile make -j"$JOBS" package/compile; then
             if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-compile.log"; then
               echo 'Optional OpenClash package failed; retrying package compilation without it'
