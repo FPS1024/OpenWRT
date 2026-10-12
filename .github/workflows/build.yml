@@ -216,6 +216,10 @@ jobs:
           storage_init="$(find "$OPENWRT_DIR/build_dir" -type f -path '*/root-sunxi/etc/init.d/opi3lts-expand-storage' -print -quit)"
           test -n "$storage_init" || { echo 'SD-card expansion init script is missing from the image root'; exit 1; }
           storage_root="${storage_init%/etc/init.d/opi3lts-expand-storage}"
+          test -f "$storage_root/lib/preinit/79_opi3lts_expand_storage" || {
+            echo 'SD-card expansion preinit hook is missing from the image root'
+            exit 1
+          }
           test -L "$storage_root/etc/rc.d/S99opi3lts-expand-storage" || {
             echo 'SD-card expansion init script is not enabled at S99'
             exit 1

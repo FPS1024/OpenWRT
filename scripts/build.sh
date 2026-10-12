@@ -267,6 +267,10 @@ run_logged "$LOG_DIR/target-install.log" make -j1 V=s target/install
 STORAGE_INIT=$(find "$OW_DIR/build_dir" -type f -path '*/root-sunxi/etc/init.d/opi3lts-expand-storage' -print -quit)
 test -n "$STORAGE_INIT" || { echo 'SD-card expansion init script is missing from the image root' >&2; exit 1; }
 STORAGE_ROOT=${STORAGE_INIT%/etc/init.d/opi3lts-expand-storage}
+test -f "$STORAGE_ROOT/lib/preinit/79_opi3lts_expand_storage" || {
+	echo 'SD-card expansion preinit hook is missing from the image root' >&2
+	exit 1
+}
 test -L "$STORAGE_ROOT/etc/rc.d/S99opi3lts-expand-storage" || {
 	echo 'SD-card expansion init script is not enabled at S99' >&2
 	exit 1

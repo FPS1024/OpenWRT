@@ -37,7 +37,7 @@ Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，
 
 为保持出厂系统稳定，固件只预装 OpenClash 运行依赖，不内置 OpenClash LuCI 插件。这样不会让插件页面代码在 LuCI 菜单初始化时影响整站可用性；需要使用时可在刷机后单独安装与当前 LuCI 兼容的 OpenClash 包。构建会检查关键依赖已进入镜像。
 
-SD 卡镜像首次启动会运行 `opi3lts-expand-storage`。脚本从 `/dev/root`、`/sys/class/block` 和当前分区表动态识别根分区及其父磁盘，不写入开发机路径，也不固定 `/dev/mmcblk0`。它先把现有根分区扩展到实际 SD/eMMC 尾部；如果根分区正在使用而内核暂时不能重读分区表，会先写入分区表并自动重启一次，下一次启动确认新尺寸后再扩展文件系统。squashfs 镜像会扩展其可写 overlay，ext4 镜像会直接扩展根文件系统。镜像本身仍保持小体积，不能靠制作 8GB 的 squashfs 解决空间问题。用 balenaEtcher 或 `dd` 写入不同容量的卡后，扩容完成会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
+SD 卡镜像首次启动会运行 `opi3lts-expand-storage`。preinit 阶段会先从 `/dev/root`、`/sys/class/block` 和当前分区表动态识别根分区及其父磁盘，并在 `mount_root` 前扩展分区；不写入开发机路径，也不固定 `/dev/mmcblk0`。根分区正在使用而内核暂时不能重读分区表时，脚本会保留文件系统不动，等待内核重启后再处理。系统挂载 overlay 后，S99 阶段才扩展 ext4/f2fs 文件系统。squashfs 镜像会扩展其可写 overlay，ext4 镜像会直接扩展根文件系统。镜像本身仍保持小体积，不能靠制作 8GB 的 squashfs 解决空间问题。用 balenaEtcher 或 `dd` 写入不同容量的卡后，扩容完成会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
 
 ```sh
 logread -e opi3lts-expand-storage

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+# Grow the root partition before mount_root creates OpenWrt's loop-backed
+# rootfs_data device.  The init script performs only the partition phase here;
+# its S99 invocation resizes the filesystem after /overlay is mounted.
+
+opi3lts_expand_storage_preinit() {
+	[ "$(board_name 2>/dev/null || true)" = "xunlong,orangepi-3-lts" ] || return 0
+	[ -x /etc/init.d/opi3lts-expand-storage ] || return 0
+	/etc/init.d/opi3lts-expand-storage start
+}
+
+boot_hook_add preinit_main opi3lts_expand_storage_preinit

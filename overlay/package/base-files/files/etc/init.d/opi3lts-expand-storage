@@ -104,16 +104,6 @@ start() {
 		logger -t opi3lts-expand-storage 'root partition not found; will retry'
 		return 0
 	}
-	root_type=$(awk '$2 == "/rom" { print $3; exit }' /proc/mounts)
-	[ -n "$root_type" ] || root_type=$(awk '$2 == "/" { print $3; exit }' /proc/mounts)
-	case "$root_type" in
-		ext4|squashfs) : ;;
-		*)
-		logger -t opi3lts-expand-storage "unsupported root filesystem on $rootpart; will retry"
-		return 0
-		;;
-	esac
-
 	root_name=${rootpart##*/}
 	root_sys="/sys/class/block/$root_name"
 	[ -e "$root_sys" ] || {
@@ -195,6 +185,21 @@ start() {
 			return 0
 		fi
 	fi
+
+	# In preinit there is no mounted /rom or / yet. The partition phase above is
+	# still safe there; mount_root will then create the loop-backed rootfs_data
+	# against the new partition size. The S99 invocation later performs the
+	# filesystem resize after the overlay is mounted.
+	root_type=$(awk '$2 == "/rom" { print $3; exit }' /proc/mounts)
+	[ -n "$root_type" ] || root_type=$(awk '$2 == "/" { print $3; exit }' /proc/mounts)
+	[ -n "$root_type" ] || return 0
+	case "$root_type" in
+		ext4|squashfs) : ;;
+		*)
+		logger -t opi3lts-expand-storage "unsupported root filesystem on $rootpart; will retry"
+		return 0
+		;;
+	esac
 
 	if [ "$root_type" = squashfs ]; then
 		command -v losetup >/dev/null 2>&1 || {
