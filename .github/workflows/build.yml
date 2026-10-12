@@ -70,6 +70,8 @@ jobs:
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
           CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+          # dnsmasq and dnsmasq-full install the same files; keep only full.
+          # CONFIG_PACKAGE_dnsmasq is not set
           CONFIG_PACKAGE_dnsmasq-full=y
           CONFIG_PACKAGE_libnettle=y
           CONFIG_PACKAGE_libnetfilter-conntrack=y

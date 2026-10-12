@@ -81,6 +81,8 @@ CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
 CONFIG_PACKAGE_kmod-nf-conntrack-netlink=y
+# dnsmasq and dnsmasq-full install the same files; keep only full.
+# CONFIG_PACKAGE_dnsmasq is not set
 CONFIG_PACKAGE_dnsmasq-full=y
 CONFIG_PACKAGE_libnettle=y
 CONFIG_PACKAGE_libnetfilter-conntrack=y
@@ -134,6 +136,12 @@ for symbol in \
 	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
 	printf 'CONFIG_%s=y\n' "$symbol" >> .config
 done
+
+# An existing incremental .config may still contain the default dnsmasq
+# variant.  Remove it before defconfig so package/install cannot collide with
+# dnsmasq-full.
+sed -i '/^CONFIG_PACKAGE_dnsmasq=y$/d; /^# CONFIG_PACKAGE_dnsmasq is not set$/d' .config
+printf '%s\n' '# CONFIG_PACKAGE_dnsmasq is not set' >> .config
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
