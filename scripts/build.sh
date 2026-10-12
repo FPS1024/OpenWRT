@@ -250,6 +250,14 @@ fi
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
+# Build the host tools and the cross toolchain before any package stage.  The
+# package stages below are individual make targets, not a full "make", so they
+# do not pull these in themselves: with a fresh tree every cmake-based host
+# package (usign, fwtool, libjson-c, lua) fails on a missing staging_dir/host/bin/ninja.
+# The CI workflow builds this same target in its own step.
+echo ">> Build host tools and cross toolchain"
+run_logged "$LOG_DIR/toolchain-install.log" make -j"$JOBS" toolchain/install
+
 prepare_fakeroot
 
 echo ">> Build packages (parallel; outputs are reused on later invocations)"
