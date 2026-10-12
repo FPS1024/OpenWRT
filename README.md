@@ -37,7 +37,7 @@ Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，
 
 为保持出厂系统稳定，固件只预装 OpenClash 运行依赖，不内置 OpenClash LuCI 插件。这样不会让插件页面代码在 LuCI 菜单初始化时影响整站可用性；需要使用时可在刷机后单独安装与当前 LuCI 兼容的 OpenClash 包。构建会检查关键依赖已进入镜像。
 
-SD 卡镜像首次启动会运行 `opi3lts-expand-storage`：把第二分区扩展到 SD/eMMC 卡尾部。squashfs 镜像会同时扩展可写 ext4 overlay，ext4 镜像会直接扩展根文件系统。这样用 balenaEtcher 或 `dd` 写入不同容量的卡后，系统会在第一次启动后使用剩余空间；扩容完成后会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
+SD 卡镜像首次启动会运行 `opi3lts-expand-storage`：把第二分区扩展到 SD/eMMC 卡尾部。脚本会先确认内核已经重新读取新的分区大小，再扩展文件系统；如果根分区正在使用而无法立即重读分区表，会写入分区状态并自动重启一次，下一次启动再完成文件系统扩展。squashfs 镜像会同时扩展可写 ext4 overlay，ext4 镜像会直接扩展根文件系统。这样用 balenaEtcher 或 `dd` 写入不同容量的卡后，系统会在首次启动流程完成后使用剩余空间；扩容完成后会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
 
 ```sh
 logread -e opi3lts-expand-storage
