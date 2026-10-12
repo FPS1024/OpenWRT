@@ -4,6 +4,7 @@ set -eu
 
 OW_COMMIT="${OW_COMMIT:-58584c6f2829a7e5d77376ab68aae3dcc4a392d8}"
 JOBS="${JOBS:-$(nproc)}"
+INCLUDE_DEV_TOOLS="${INCLUDE_DEV_TOOLS:-0}"
 DEVICE="xunlong_orangepi-3-lts"
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OW_DIR="${OPENWRT_DIR:-$HERE/.work/openwrt}"
@@ -11,6 +12,7 @@ LOG_DIR="${LOG_DIR:-$HERE/_logs}"
 
 mkdir -p "$(dirname "$OW_DIR")" "$LOG_DIR"
 export FORCE_UNSAFE_CONFIGURE=1
+export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 
 run_logged() {
 	_run_log_file="$1"
@@ -75,6 +77,8 @@ if [ ! -s .config ] \
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
+CONFIG_DEVEL=y
+CONFIG_CCACHE=y
 CONFIG_PER_FEED_REPO=y
 CONFIG_FEED_packages=y
 CONFIG_FEED_luci=y
@@ -105,19 +109,30 @@ CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
-# Native utilities requested for on-device maintenance/builds.
-CONFIG_PACKAGE_git=y
-CONFIG_PACKAGE_git-http=y
-CONFIG_PACKAGE_make=y
-CONFIG_PACKAGE_gcc=y
-CONFIG_PACKAGE_binutils=y
-# OpenWrt 24.10 has no target packages named cmake/build-essential;
-# gcc/binutils/make are the available target-side toolchain pieces.
 CONFIG_PACKAGE_sfdisk=y
 CONFIG_PACKAGE_partx-utils=y
 CONFIG_PACKAGE_losetup=y
 CONFIG_PACKAGE_resize2fs=y
 EOF
+if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
+	cat >> .config <<'EOF'
+# Optional target-side development tools. They are omitted from the default
+# production image because they add a large amount of build time and size.
+CONFIG_PACKAGE_git=y
+CONFIG_PACKAGE_git-http=y
+CONFIG_PACKAGE_make=y
+CONFIG_PACKAGE_gcc=y
+CONFIG_PACKAGE_binutils=y
+EOF
+else
+	cat >> .config <<'EOF'
+# CONFIG_PACKAGE_git is not set
+# CONFIG_PACKAGE_git-http is not set
+# CONFIG_PACKAGE_make is not set
+# CONFIG_PACKAGE_gcc is not set
+# CONFIG_PACKAGE_binutils is not set
+EOF
+fi
 fi
 
 if [ -f "$OW_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
@@ -132,6 +147,8 @@ fi
 # Keep the web UI selected in an existing incremental build tree too.
 for symbol in \
 	PER_FEED_REPO \
+	DEVEL \
+	CCACHE \
 	FEED_packages \
 	FEED_luci \
 	PACKAGE_luci \
@@ -159,11 +176,6 @@ for symbol in \
 	PACKAGE_luci-i18n-base-zh-cn \
 	PACKAGE_luci-i18n-firewall-zh-cn \
 	PACKAGE_luci-i18n-package-manager-zh-cn \
-	PACKAGE_git \
-	PACKAGE_git-http \
-	PACKAGE_make \
-	PACKAGE_gcc \
-	PACKAGE_binutils \
 	PACKAGE_sfdisk \
 	PACKAGE_partx-utils \
 	PACKAGE_losetup \
@@ -171,6 +183,17 @@ for symbol in \
 	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
 	printf 'CONFIG_%s=y\n' "$symbol" >> .config
 done
+if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
+	for symbol in PACKAGE_git PACKAGE_git-http PACKAGE_make PACKAGE_gcc PACKAGE_binutils; do
+		sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
+		printf 'CONFIG_%s=y\n' "$symbol" >> .config
+	done
+else
+	for symbol in PACKAGE_git PACKAGE_git-http PACKAGE_make PACKAGE_gcc PACKAGE_binutils; do
+		sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
+		printf '# CONFIG_%s is not set\n' "$symbol" >> .config
+	done
+fi
 
 # An existing incremental .config may still contain the default dnsmasq
 # variant.  Remove it before defconfig so package/install cannot collide with
@@ -192,29 +215,47 @@ fi
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
-echo ">> Build firmware (make reuses valid outputs and rebuilds any missing dependencies)"
-if ! run_logged "$LOG_DIR/build.log" make -j"$JOBS"; then
-	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && \
-		grep -Eq 'luci-app-openclash(-prebuilt)?|package/luci-app-openclash' "$LOG_DIR/build.log"; then
-		echo ">> OpenClash package failed; retrying the image without optional OpenClash"
-		rm -rf package/luci-app-openclash-prebuilt
-		sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-		printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
-		run_logged "$LOG_DIR/defconfig-without-openclash.log" make defconfig
-		run_logged "$LOG_DIR/build-without-openclash.log" make -j"$JOBS"
-	elif grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
-		df -h > "$LOG_DIR/disk-after-build-failure.txt"
-		df -i >> "$LOG_DIR/disk-after-build-failure.txt"
-		echo ">> Retry target/linux/install serially with verbose output"
-		if ! run_logged "$LOG_DIR/target-linux-install.log" make -j1 V=s target/linux/install; then
-			exit 1
-		fi
-		echo ">> Verbose target install passed; resume full image build"
-		run_logged "$LOG_DIR/build-retry.log" make -j"$JOBS"
+disable_openclash() {
+	rm -rf package/luci-app-openclash-prebuilt
+	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+	printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+	run_logged "$LOG_DIR/defconfig-without-openclash.log" make defconfig
+}
+
+openclash_failed() {
+	# A normal `make -C package/luci-app-openclash-prebuilt compile` line is
+	# not a failure and must not trigger a second full build.
+	grep -Eq 'ERROR: package/luci-app-openclash-prebuilt failed|package/luci-app-openclash-prebuilt/[^ ]*.*Error [1-9]|luci-app-openclash-prebuilt.*failed' "$1"
+}
+
+echo ">> Build packages (parallel; outputs are reused on later invocations)"
+if ! run_logged "$LOG_DIR/package-compile.log" make -j"$JOBS" package/compile; then
+	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-compile.log"; then
+		echo ">> Optional OpenClash package failed; retrying package compilation without it"
+		disable_openclash
+		run_logged "$LOG_DIR/package-compile-without-openclash.log" make -j"$JOBS" package/compile
 	else
 		exit 1
 	fi
 fi
+
+echo ">> Install packages into the image root"
+if ! run_logged "$LOG_DIR/package-install.log" make -j"$JOBS" package/install; then
+	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-install.log"; then
+		echo ">> Optional OpenClash package failed during install; retrying without it"
+		disable_openclash
+		run_logged "$LOG_DIR/package-compile-without-openclash.log" make -j"$JOBS" package/compile
+		run_logged "$LOG_DIR/package-install-without-openclash.log" make -j"$JOBS" package/install
+	else
+		exit 1
+	fi
+fi
+
+echo ">> Build target image (serial and verbose; this is the short final stage)"
+run_logged "$LOG_DIR/target-install.log" make -j1 V=s target/install
+
+echo ">> Generate package indexes and checksums"
+run_logged "$LOG_DIR/package-index.log" make -j"$JOBS" package/index json_overview_image_info checksum
 
 echo ">> Verify expected image and driver packages exist"
 IMAGE_DIR="bin/targets/sunxi/cortexa53"
@@ -225,12 +266,17 @@ for package in \
 	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
 	dnsmasq-full libnettle8 libnetfilter-conntrack3 \
 	bash curl ca-bundle ip-full ruby ruby-yaml unzip \
-	git git-http make gcc binutils sfdisk partx-utils losetup resize2fs \
+	sfdisk partx-utils losetup resize2fs \
 	luci-theme-argon luci-app-argon-config \
 	luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
 	luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Expected web-admin package is missing: $package" >&2; exit 1; }
 done
+if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
+	for package in git git-http make gcc binutils; do
+		grep -q "^${package} " "$MANIFEST" || { echo "Requested development package is missing: $package" >&2; exit 1; }
+	done
+fi
 if grep -q '^luci-app-openclash ' "$MANIFEST"; then
 	echo 'OpenClash package was included in the image'
 else
