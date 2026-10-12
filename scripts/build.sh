@@ -103,6 +103,7 @@ if [ ! -s .config ] \
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
+CONFIG_TARGET_ROOTFS_PARTSIZE=104
 CONFIG_DEVEL=y
 CONFIG_PER_FEED_REPO=y
 CONFIG_FEED_packages=y
@@ -225,10 +226,18 @@ printf '%s\n' '# CONFIG_PACKAGE_dnsmasq is not set' >> .config
 # Do not let an older incremental tree force the optional ccache host tool.
 sed -i '/^CONFIG_CCACHE=y$/d; /^# CONFIG_CCACHE is not set$/d' .config
 printf '%s\n' '# CONFIG_CCACHE is not set' >> .config
+# Keep the image root partition fixed and small. First boot grows the existing
+# root partition and its filesystem on the actual target device.
+sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
+printf '%s\n' 'CONFIG_TARGET_ROOTFS_PARTSIZE=104' >> .config
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
+grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=104' .config || {
+	echo 'Unexpected rootfs partition size: keep the factory image small (104 MiB)' >&2
+	exit 1
+}
 grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
@@ -294,6 +303,13 @@ echo 'OpenClash app is not bundled; its runtime dependencies are included'
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
+SQUASHFS_IMAGE="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}-squashfs-sdcard.img.gz"
+test -s "$SQUASHFS_IMAGE" || { echo "SquashFS image is missing: $SQUASHFS_IMAGE" >&2; exit 1; }
+SQUASHFS_BYTES=$(wc -c < "$SQUASHFS_IMAGE")
+[ "$SQUASHFS_BYTES" -lt 268435456 ] || {
+	echo "SquashFS image is unexpectedly large (${SQUASHFS_BYTES} bytes); refusing an artificial multi-gigabyte image" >&2
+	exit 1
+}
 for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Kernel-matched ${package} package is missing from the image" >&2; exit 1; }
 done

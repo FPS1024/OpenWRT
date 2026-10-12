@@ -29,40 +29,63 @@ block_start() {
 }
 
 root_partition() {
-	local path candidate uuid
+	local path candidate uuid part_number candidate_number
 
 	# OpenWrt's mount_root resolves /dev/root to the actual partition. This is
 	# available on the target image and avoids requiring blkid or udev's
 	# /dev/disk/by-partuuid hierarchy.
 	path=$(readlink -f /dev/root 2>/dev/null || true)
 	case "$path" in
-		/dev/mmcblk*p2|/dev/sd*p2|/dev/nvme*n1p2)
-			[ -b "$path" ] && {
+		/dev/*)
+			if [ -b "$path" ] && [ -s "/sys/class/block/${path##*/}/partition" ]; then
 				printf '%s\n' "$path"
 				return 0
-			}
+			fi
 			;;
 	esac
 
-	uuid=$(sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline)
-	case "$uuid" in
-		*-02) : ;;
-		*) return 1 ;;
-	esac
-
-	# Fallback for systems without /dev/root or a PARTUUID symlink. The H6
-	# factory image always uses partition 2 for the root filesystem.
-	for candidate in /dev/mmcblk*p2 /dev/sd*p2 /dev/nvme*n1p2; do
+	# Fallback for systems without /dev/root.  The low byte of an MBR
+	# PARTUUID is the partition number; use it to find the actual partition
+	# instead of assuming that rootfs is partition 2.
+	uuid=$(sed -n 's/.*root=PARTUUID=[^ -]*-\([0-9A-Fa-f][0-9A-Fa-f]\).*/\1/p' /proc/cmdline)
+	part_number=$(printf '%s\n' "$uuid" | sed 's/^0*//')
+	[ -n "$part_number" ] || return 1
+	for candidate in /dev/mmcblk*p* /dev/sd*[0-9] /dev/nvme*n1p*; do
 		[ -b "$candidate" ] || continue
+		candidate_number=$(cat "/sys/class/block/${candidate##*/}/partition" 2>/dev/null || true)
+		[ "$candidate_number" = "$part_number" ] || continue
 		printf '%s\n' "$candidate"
 		return 0
 	done
 	return 1
 }
 
+partition_table_sectors() {
+	local disk="$1" partition="$2"
+	sfdisk -d "$disk" 2>/dev/null | awk -v wanted="$partition" '
+		$1 == wanted {
+			for (i = 1; i <= NF; i++) {
+				if ($i == "size=") {
+					value = $(i + 1)
+					gsub(/,/, "", value)
+					print value
+					exit
+				}
+				if ($i ~ /^size=/) {
+					sub(/^size=/, "", $i)
+					gsub(/,/, "", $i)
+					print $i
+					exit
+				}
+			}
+		}
+	}'
+}
+
 start() {
-	local rootpart disk root_type overlaydev overlay_type tool board
-	local part_sectors disk_sectors part_start target_sectors new_part_sectors
+	local rootpart disk root_type overlaydev overlay_type tool board resize_tool
+	local root_name root_sys disk_name part_number part_sectors disk_sectors
+	local part_start target_sectors new_part_sectors table_sectors
 
 	[ -e "$MARKER" ] && return 0
 	board=$(board_name 2>/dev/null || true)
@@ -70,7 +93,7 @@ start() {
 		logger -t opi3lts-expand-storage "unsupported board: $board"
 		return 0
 	}
-	for tool in sfdisk partx resize2fs; do
+	for tool in sfdisk partx; do
 		command -v "$tool" >/dev/null 2>&1 || {
 			logger -t opi3lts-expand-storage "$tool is unavailable; will retry"
 			return 0
@@ -91,12 +114,29 @@ start() {
 		;;
 	esac
 
-	case "$rootpart" in
-		/dev/mmcblk*p2) disk=${rootpart%p2} ;;
-		/dev/sd*p2) disk=${rootpart%p2} ;;
-		/dev/nvme*n1p2) disk=${rootpart%p2} ;;
-		*) return 0 ;;
+	root_name=${rootpart##*/}
+	root_sys="/sys/class/block/$root_name"
+	[ -e "$root_sys" ] || {
+		logger -t opi3lts-expand-storage "sysfs entry not found for $rootpart"
+		return 0
+	}
+	disk_name=$(basename "$(dirname "$(readlink -f "$root_sys" 2>/dev/null || true)")")
+	disk="/dev/$disk_name"
+	part_number=$(cat "$root_sys/partition" 2>/dev/null || true)
+	[ -n "$disk_name" ] || {
+		logger -t opi3lts-expand-storage "cannot determine parent disk for $rootpart"
+		return 0
+	}
+	case "$part_number" in
+		''|*[!0-9]*|0)
+			logger -t opi3lts-expand-storage "cannot determine disk or partition number for $rootpart"
+			return 0
+			;;
 	esac
+	[ -b "$disk" ] || {
+		logger -t opi3lts-expand-storage "parent block device not found for $rootpart"
+		return 0
+	}
 
 	# Do not resize the filesystem based only on sfdisk's exit status.  With a
 	# mounted root partition the kernel can keep the old in-memory table while
@@ -119,13 +159,24 @@ start() {
 	fi
 
 	if [ "$part_sectors" -lt "$target_sectors" ]; then
-		# A blank start with '+' size preserves partition 2's start and consumes
+		# A blank start with '+' size preserves the current partition start and consumes
 		# all free sectors after it. --no-reread avoids failing while /rom is open.
-		if ! printf ',+\n' | sfdisk --no-reread -N 2 "$disk" >/tmp/opi3lts-sfdisk.log 2>&1; then
+		if ! printf ',+\n' | sfdisk --no-reread -N "$part_number" "$disk" >/tmp/opi3lts-sfdisk.log 2>&1; then
 			logger -t opi3lts-expand-storage "partition resize failed: $(cat /tmp/opi3lts-sfdisk.log)"
 			return 0
 		fi
 		sync
+		table_sectors=$(partition_table_sectors "$disk" "$rootpart")
+		case "$table_sectors" in
+			''|*[!0-9]*)
+				logger -t opi3lts-expand-storage "cannot verify the on-disk partition table for $rootpart"
+				return 0
+				;;
+		esac
+		if [ "$table_sectors" -lt "$target_sectors" ]; then
+			logger -t opi3lts-expand-storage "on-disk partition table did not reach the end of $disk"
+			return 0
+		fi
 		partx -u "$disk" >/dev/null 2>&1 || true
 		sleep 1
 		new_part_sectors=$(block_sectors "$rootpart")
@@ -156,21 +207,34 @@ start() {
 			return 0
 		}
 		overlay_type=$(awk '$2 == "/overlay" { print $3; exit }' /proc/mounts)
-		[ "$overlay_type" = ext4 ] || {
+		case "$overlay_type" in
+			ext4) resize_tool=resize2fs ;;
+			f2fs)
+				if command -v resize.f2fs >/dev/null 2>&1; then
+					resize_tool=resize.f2fs
+				elif command -v resize_f2fs >/dev/null 2>&1; then
+					resize_tool=resize_f2fs
+				else
+					logger -t opi3lts-expand-storage 'f2fs overlay detected but no f2fs resize tool is installed'
+					return 0
+				fi
+				;;
+			*)
 			logger -t opi3lts-expand-storage "unsupported overlay filesystem $overlay_type on $overlaydev; will retry"
 			return 0
-		}
+			;;
+		esac
 
 		# The loop device was created before the partition grew. Refresh its size
 		# and perform an online ext4 expansion.  The partition-size check above
 		# guarantees that the backing partition is already large enough.
 		losetup -c "$overlaydev" >/dev/null 2>&1 || true
-		if resize2fs "$overlaydev" >/tmp/opi3lts-resize2fs.log 2>&1; then
+		if "$resize_tool" "$overlaydev" >/tmp/opi3lts-resizefs.log 2>&1; then
 			touch "$MARKER"
 			rm -f "$PARTITION_MARKER"
 			logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
 		else
-			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log)"
+			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resizefs.log)"
 		fi
 		return 0
 	fi
