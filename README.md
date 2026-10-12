@@ -35,9 +35,16 @@ Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，
 
 固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 常用的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
 
-构建时会从 OpenClash 最新 GitHub Release 选择 nftables 可用的 LuCI IPK，并在依赖已经选入镜像后编入固件。Release API 或 IPK 下载失败时只跳过 OpenClash，保留其他固件构建；依赖包仍会作为必选项校验。也可以把 `luci-app-openclash*.ipk` 放入仓库根目录的 `apps/` 目录，作为本地或无网络构建的回退包。
+为保持出厂系统稳定，固件只预装 OpenClash 运行依赖，不内置 OpenClash LuCI 插件。这样不会让插件页面代码在 LuCI 菜单初始化时影响整站可用性；需要使用时可在刷机后单独安装与当前 LuCI 兼容的 OpenClash 包。构建会检查关键依赖已进入镜像。
 
-SD 卡镜像首次启动会运行 `opi3lts-expand-storage`：把第二分区扩展到 SD/eMMC 卡尾部，并扩展 squashfs 的可写 overlay。这样用 balenaEtcher 或 `dd` 写入不同容量的卡后，系统会在第一次启动后使用剩余空间；扩容完成后会留下 `/etc/opi3lts-storage-expanded` 标记。
+SD 卡镜像首次启动会运行 `opi3lts-expand-storage`：把第二分区扩展到 SD/eMMC 卡尾部。squashfs 镜像会同时扩展可写 ext4 overlay，ext4 镜像会直接扩展根文件系统。这样用 balenaEtcher 或 `dd` 写入不同容量的卡后，系统会在第一次启动后使用剩余空间；扩容完成后会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
+
+```sh
+logread -e opi3lts-expand-storage
+cat /proc/partitions
+df -h
+ls -l /etc/opi3lts-storage-expanded
+```
 
 GitHub Actions 可选发送构建通知邮件。到仓库 **Settings → Secrets and variables → Actions** 添加 `SMTP_USERNAME` 和 `SMTP_PASSWORD`；默认使用 Outlook.com 的 `smtp-mail.outlook.com:587`，也可以添加可选的 `SMTP_SERVER` 覆盖服务器地址。Outlook 通常需要启用 SMTP AUTH 或使用应用专用密码。未配置 Secrets 时只跳过通知，不影响构建结果。刷机后可运行 `opkg update` 安装其他用户态软件，避免从滚动 Snapshot 源重复安装这些已内置依赖。
 

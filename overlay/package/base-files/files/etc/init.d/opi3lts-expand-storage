@@ -1,8 +1,9 @@
 #!/bin/sh /etc/rc.common
-# Grow the second SD/eMMC partition to the end of the card and expand the
-# squashfs tail overlay.  OpenWrt's rootdisk driver stores rootfs_data after
-# the squashfs bytes in that partition, so the factory image can be written to
-# cards of different sizes and still use all available space after first boot.
+# Grow the root partition to the end of the card and expand its filesystem.
+# For a squashfs image, OpenWrt stores rootfs_data after the squashfs bytes in
+# the same partition and exposes it through a loop device.  For an ext4 image,
+# the root filesystem is the partition itself.  Both layouts are produced by
+# the Orange Pi 3 LTS image targets.
 
 START=99
 USE_PROCD=0
@@ -11,16 +12,39 @@ USE_PROCD=0
 
 MARKER=/etc/opi3lts-storage-expanded
 
+partition_type() {
+	local path fstype magic
+	path="$1"
+	fstype=$(blkid -o value -s TYPE "$path" 2>/dev/null || true)
+	case "$fstype" in
+		ext4|squashfs)
+			printf '%s\n' "$fstype"
+			return 0
+			;;
+	esac
+
+	# blkid can miss squashfs when the partition also contains the writable
+	# tail.  Check its on-disk magic directly as a fallback.
+	magic=$(dd if="$path" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
+	[ "$magic" = "68737173" ] && {
+		printf '%s\n' squashfs
+		return 0
+	}
+	return 1
+}
+
 root_partition() {
-	local uuid path candidate fstype
+	local uuid path candidate
 
 	uuid=$(sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline)
 	if [ -n "$uuid" ] && [ -e "/dev/disk/by-partuuid/$uuid" ]; then
 		path=$(readlink -f "/dev/disk/by-partuuid/$uuid" 2>/dev/null || true)
 		case "$path" in
 			/dev/mmcblk*p2|/dev/sd*p2|/dev/nvme*n1p2)
-				printf '%s\n' "$path"
-				return 0
+				[ -b "$path" ] && {
+					printf '%s\n' "$path"
+					return 0
+				}
 				;;
 		esac
 	fi
@@ -28,23 +52,33 @@ root_partition() {
 	# Fallback for bootloaders that do not expose a usable PARTUUID symlink.
 	for candidate in /dev/mmcblk*p2 /dev/sd*p2 /dev/nvme*n1p2; do
 		[ -b "$candidate" ] || continue
-		fstype=$(blkid -o value -s TYPE "$candidate" 2>/dev/null || true)
-		[ "$fstype" = squashfs ] || continue
-		printf '%s\n' "$candidate"
-		return 0
+		if partition_type "$candidate" >/dev/null; then
+			printf '%s\n' "$candidate"
+			return 0
+		fi
 	done
 	return 1
 }
 
 start() {
-	local rootpart disk overlaydev
+	local rootpart disk root_type overlaydev overlay_type
 
 	[ -e "$MARKER" ] && return 0
 	[ "$(board_name 2>/dev/null || true)" = "xunlong,orangepi-3-lts" ] || return 0
-	command -v sfdisk >/dev/null 2>&1 || return 0
+	local tool
+	for tool in sfdisk partx resize2fs; do
+		command -v "$tool" >/dev/null 2>&1 || {
+			logger -t opi3lts-expand-storage "$tool is unavailable; will retry"
+			return 0
+		}
+	done
 
 	rootpart=$(root_partition) || {
-		logger -t opi3lts-expand-storage 'root squashfs partition not found; will retry'
+		logger -t opi3lts-expand-storage 'root partition not found; will retry'
+		return 0
+	}
+	root_type=$(partition_type "$rootpart") || {
+		logger -t opi3lts-expand-storage "unsupported root filesystem on $rootpart; will retry"
 		return 0
 	}
 
@@ -64,19 +98,40 @@ start() {
 
 	partx -u "$disk" >/dev/null 2>&1 || true
 	sleep 1
-	overlaydev=$(awk '$2 == "/overlay" { print $1; exit }' /proc/mounts)
-	[ -n "$overlaydev" ] || {
-		logger -t opi3lts-expand-storage 'overlay device not found; will retry after reboot'
-		return 0
-	}
 
-	# The loop device was created before the partition grew. Refresh its size and
-	# perform an online ext4 expansion. If either operation is temporarily busy,
-	# the marker remains absent and the next boot retries it.
-	losetup -c "$overlaydev" >/dev/null 2>&1 || true
-	if resize2fs "$overlaydev" >/tmp/opi3lts-resize2fs.log 2>&1; then
+	if [ "$root_type" = squashfs ]; then
+		command -v losetup >/dev/null 2>&1 || {
+			logger -t opi3lts-expand-storage 'losetup is unavailable; will retry'
+			return 0
+		}
+		overlaydev=$(awk '$2 == "/overlay" { print $1; exit }' /proc/mounts)
+		[ -n "$overlaydev" ] || {
+			logger -t opi3lts-expand-storage 'squashfs overlay device not found; will retry after reboot'
+			return 0
+		}
+		overlay_type=$(awk '$2 == "/overlay" { print $3; exit }' /proc/mounts)
+		[ "$overlay_type" = ext4 ] || {
+			logger -t opi3lts-expand-storage "unsupported overlay filesystem $overlay_type on $overlaydev; will retry"
+			return 0
+		}
+
+		# The loop device was created before the partition grew. Refresh its size
+		# and perform an online ext4 expansion.
+		losetup -c "$overlaydev" >/dev/null 2>&1 || true
+		if resize2fs "$overlaydev" >/tmp/opi3lts-resize2fs.log 2>&1; then
+			touch "$MARKER"
+			logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
+		else
+			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log)"
+		fi
+		return 0
+	fi
+
+	# The ext4 image has no separate rootfs_data loop device.  resize2fs can
+	# grow the mounted root filesystem online after the partition table grows.
+	if resize2fs "$rootpart" >/tmp/opi3lts-resize2fs.log 2>&1; then
 		touch "$MARKER"
-		logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
+		logger -t opi3lts-expand-storage "expanded $rootpart using all space on $disk"
 	else
 		logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log)"
 	fi

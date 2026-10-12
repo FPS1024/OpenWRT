@@ -57,14 +57,17 @@ jobs:
           ./scripts/feeds install -a -p luci > "$LOG_DIR/feeds-install-luci.log" 2>&1 || { cat "$LOG_DIR/feeds-install-luci.log"; exit 1; }
           sh "$GITHUB_WORKSPACE/scripts/prepare-argon.sh" "$OPENWRT_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1 || { cat "$LOG_DIR/argon-sources.txt"; exit 1; }
           cat "$LOG_DIR/argon-sources.txt"
-          sh "$GITHUB_WORKSPACE/scripts/prepare-openclash.sh" "$OPENWRT_DIR" > "$LOG_DIR/openclash-source.txt" 2>&1 || { cat "$LOG_DIR/openclash-source.txt"; exit 1; }
-          cat "$LOG_DIR/openclash-source.txt"
 
       - name: Apply overlay and configure
         run: |
           mkdir -p "$LOG_DIR"
           sh scripts/apply-overlay.sh "$OPENWRT_DIR"
           cd "$OPENWRT_DIR"
+          rm -rf package/luci-app-openclash-prebuilt
+          rm -f dl/luci-app-openclash-latest.ipk
+          if [ -d bin/packages ]; then
+            find bin/packages -type f -name 'luci-app-openclash*.ipk' -delete
+          fi
           cat > .config <<'EOF'
           CONFIG_TARGET_sunxi=y
           CONFIG_TARGET_sunxi_cortexa53=y
@@ -129,21 +132,18 @@ jobs:
           # CONFIG_PACKAGE_libopcodes is not set
           EOF
           fi
-          if [ -f "$OPENWRT_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
-            printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
-          else
-            printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
-          fi
+          printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
           grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled'; exit 1; }
           grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig'; exit 1; }
-          grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
-          if [ -f "$OPENWRT_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
-            grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config || { echo 'OpenClash was not selected by defconfig'; exit 1; }
+          if grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
+            echo 'OpenClash app must not be selected for the factory image'
+            exit 1
           fi
+          grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
           for package in \
             luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
             luci-theme-argon luci-app-argon-config \
@@ -196,17 +196,6 @@ jobs:
             fi
             echo "=== DONE ${name} ($(date -u +%FT%TZ)) ==="
           }
-          disable_openclash() {
-            rm -rf package/luci-app-openclash-prebuilt
-            sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-            printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
-            make defconfig > "$LOG_DIR/defconfig-without-openclash.log" 2>&1 || { cat "$LOG_DIR/defconfig-without-openclash.log"; exit 1; }
-          }
-          openclash_failed() {
-            # Match only fatal package messages. A normal `make -C ... compile`
-            # line must never trigger a second full build.
-            grep -Eq 'ERROR: package/luci-app-openclash-prebuilt failed|package/luci-app-openclash-prebuilt/[^ ]*.*Error [1-9]|luci-app-openclash-prebuilt.*failed' "$1"
-          }
           fakeroot_bin="$OPENWRT_DIR/staging_dir/host/bin/fakeroot"
           if [ -x "$fakeroot_bin" ] && ! "$fakeroot_bin" true >/dev/null 2>&1 && [ -x /usr/bin/fakeroot ]; then
             cp -p "$fakeroot_bin" "$fakeroot_bin.openwrt" 2>/dev/null || true
@@ -217,28 +206,18 @@ jobs:
             chmod 0755 "$fakeroot_bin"
             echo 'Using system fakeroot because the OpenWrt host helper failed its socket probe'
           fi
-          if ! stage package-compile make -j"$JOBS" package/compile; then
-            if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-compile.log"; then
-              echo 'Optional OpenClash package failed; retrying package compilation without it'
-              disable_openclash
-              stage package-compile-without-openclash make -j"$JOBS" package/compile || exit 1
-            else
-              exit 1
-            fi
-          fi
-          if ! stage package-install make -j"$JOBS" package/install; then
-            if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-install.log"; then
-              echo 'Optional OpenClash package failed during install; retrying without it'
-              disable_openclash
-              stage package-compile-without-openclash make -j"$JOBS" package/compile || exit 1
-              stage package-install-without-openclash make -j"$JOBS" package/install || exit 1
-            else
-              exit 1
-            fi
-          fi
+          stage package-compile make -j"$JOBS" package/compile || exit 1
+          stage package-install make -j"$JOBS" package/install || exit 1
           # Image generation is deliberately serial and verbose. This is the
           # short final stage and its log now contains the real failing command.
           stage target-install make -j1 V=s target/install || exit 1
+          storage_init="$(find "$OPENWRT_DIR/build_dir" -type f -path '*/root-sunxi/etc/init.d/opi3lts-expand-storage' -print -quit)"
+          test -n "$storage_init" || { echo 'SD-card expansion init script is missing from the image root'; exit 1; }
+          storage_root="${storage_init%/etc/init.d/opi3lts-expand-storage}"
+          test -L "$storage_root/etc/rc.d/S99opi3lts-expand-storage" || {
+            echo 'SD-card expansion init script is not enabled at S99'
+            exit 1
+          }
           stage package-index make -j"$JOBS" package/index json_overview_image_info checksum || exit 1
           image_dir=bin/targets/sunxi/cortexa53
           manifest="$image_dir/openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts.manifest"
@@ -259,10 +238,10 @@ jobs:
             done
           fi
           if grep -q '^luci-app-openclash ' "$manifest"; then
-            echo 'OpenClash package was included in the image'
-          else
-            echo 'WARNING: OpenClash release package was unavailable; continuing without optional app'
+            echo 'Unexpected OpenClash app package found in image manifest'
+            exit 1
           fi
+          echo 'OpenClash app is not bundled; its runtime dependencies are included'
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
           grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated'; cat "$LOG_DIR/images.txt"; exit 1; }
           for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
@@ -293,9 +272,7 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-app-openclash*.ipk
-          # The OpenClash IPK is optional; the build step validates all
-          # mandatory image and driver outputs before this upload.
+          # The image includes OpenClash runtime dependencies, not the app.
           if-no-files-found: warn
 
       - name: Upload build diagnostics

@@ -86,11 +86,14 @@ if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt
 	exit 1
 fi
 cat "$LOG_DIR/argon-sources.txt"
-if ! sh "$HERE/scripts/prepare-openclash.sh" "$OW_DIR" > "$LOG_DIR/openclash-source.txt" 2>&1; then
-	cat "$LOG_DIR/openclash-source.txt"
-	exit 1
+# The image carries OpenClash runtime dependencies, but not the LuCI app.
+# Remove generated leftovers from an older incremental build so it cannot be
+# selected or copied into the image accidentally.
+rm -rf "$OW_DIR/package/luci-app-openclash-prebuilt"
+rm -f "$OW_DIR/dl/luci-app-openclash-latest.ipk"
+if [ -d "$OW_DIR/bin/packages" ]; then
+	find "$OW_DIR/bin/packages" -type f -name 'luci-app-openclash*.ipk' -delete
 fi
-cat "$LOG_DIR/openclash-source.txt"
 
 if [ ! -s .config ] \
 	|| ! grep -qx 'CONFIG_TARGET_sunxi=y' .config \
@@ -157,14 +160,10 @@ EOF
 fi
 fi
 
-if [ -f "$OW_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
-	# The app is optional; its dependencies below are still mandatory.
-	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-	printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
-else
-	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-	printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
-fi
+# Drop a stale OpenClash selection from an existing local .config. Its runtime
+# dependencies remain selected in the package list above.
+sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
 
 # Keep the web UI selected in an existing incremental build tree too.
 for symbol in \
@@ -234,8 +233,9 @@ grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is no
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
-if [ -f "$OW_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
-	grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config || { echo 'OpenClash was not selected by defconfig' >&2; exit 1; }
+if grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
+	echo 'OpenClash app must not be selected for the factory image' >&2
+	exit 1
 fi
 
 echo ">> Download sources"
@@ -243,44 +243,25 @@ run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
 prepare_fakeroot
 
-disable_openclash() {
-	rm -rf package/luci-app-openclash-prebuilt
-	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-	printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
-	run_logged "$LOG_DIR/defconfig-without-openclash.log" make defconfig
-}
-
-openclash_failed() {
-	# A normal `make -C package/luci-app-openclash-prebuilt compile` line is
-	# not a failure and must not trigger a second full build.
-	grep -Eq 'ERROR: package/luci-app-openclash-prebuilt failed|package/luci-app-openclash-prebuilt/[^ ]*.*Error [1-9]|luci-app-openclash-prebuilt.*failed' "$1"
-}
-
 echo ">> Build packages (parallel; outputs are reused on later invocations)"
-if ! run_logged "$LOG_DIR/package-compile.log" make -j"$JOBS" package/compile; then
-	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-compile.log"; then
-		echo ">> Optional OpenClash package failed; retrying package compilation without it"
-		disable_openclash
-		run_logged "$LOG_DIR/package-compile-without-openclash.log" make -j"$JOBS" package/compile
-	else
-		exit 1
-	fi
-fi
+run_logged "$LOG_DIR/package-compile.log" make -j"$JOBS" package/compile
 
 echo ">> Install packages into the image root"
-if ! run_logged "$LOG_DIR/package-install.log" make -j"$JOBS" package/install; then
-	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && openclash_failed "$LOG_DIR/package-install.log"; then
-		echo ">> Optional OpenClash package failed during install; retrying without it"
-		disable_openclash
-		run_logged "$LOG_DIR/package-compile-without-openclash.log" make -j"$JOBS" package/compile
-		run_logged "$LOG_DIR/package-install-without-openclash.log" make -j"$JOBS" package/install
-	else
-		exit 1
-	fi
-fi
+run_logged "$LOG_DIR/package-install.log" make -j"$JOBS" package/install
 
 echo ">> Build target image (serial and verbose; this is the short final stage)"
 run_logged "$LOG_DIR/target-install.log" make -j1 V=s target/install
+
+# The first-boot storage grower is part of the base-files overlay. Verify that
+# package/install copied it into the actual image root and enabled it at S99;
+# otherwise a factory image would keep only the fixed 104 MiB root partition.
+STORAGE_INIT=$(find "$OW_DIR/build_dir" -type f -path '*/root-sunxi/etc/init.d/opi3lts-expand-storage' -print -quit)
+test -n "$STORAGE_INIT" || { echo 'SD-card expansion init script is missing from the image root' >&2; exit 1; }
+STORAGE_ROOT=${STORAGE_INIT%/etc/init.d/opi3lts-expand-storage}
+test -L "$STORAGE_ROOT/etc/rc.d/S99opi3lts-expand-storage" || {
+	echo 'SD-card expansion init script is not enabled at S99' >&2
+	exit 1
+}
 
 echo ">> Generate package indexes and checksums"
 run_logged "$LOG_DIR/package-index.log" make -j"$JOBS" package/index json_overview_image_info checksum
@@ -306,10 +287,10 @@ if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 	done
 fi
 if grep -q '^luci-app-openclash ' "$MANIFEST"; then
-	echo 'OpenClash package was included in the image'
-else
-	echo 'WARNING: OpenClash release package was unavailable; continuing without optional app'
+	echo 'Unexpected OpenClash app package found in image manifest' >&2
+	exit 1
 fi
+echo 'OpenClash app is not bundled; its runtime dependencies are included'
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }
