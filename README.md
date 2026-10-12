@@ -37,7 +37,7 @@ Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，
 
 为保持出厂系统稳定，固件只预装 OpenClash 运行依赖，不内置 OpenClash LuCI 插件。这样不会让插件页面代码在 LuCI 菜单初始化时影响整站可用性；需要使用时可在刷机后单独安装与当前 LuCI 兼容的 OpenClash 包。构建会检查关键依赖已进入镜像。
 
-SD 卡镜像首次启动会运行 `opi3lts-expand-storage`。preinit 阶段会先从 `/dev/root`、`/sys/class/block` 和当前分区表动态识别根分区及其父磁盘，并在 `mount_root` 前扩展分区；不写入开发机路径，也不固定 `/dev/mmcblk0`。根分区正在使用而内核暂时不能重读分区表时，脚本会保留文件系统不动，等待内核重启后再处理。系统挂载 overlay 后，S99 阶段才扩展 ext4/f2fs 文件系统。squashfs 镜像会扩展其可写 overlay，ext4 镜像会直接扩展根文件系统。镜像本身仍保持小体积，不能靠制作 8GB 的 squashfs 解决空间问题。用 balenaEtcher 或 `dd` 写入不同容量的卡后，扩容完成会留下 `/etc/opi3lts-storage-expanded` 标记。可用下面的命令确认扩容已经完成：
+SD 卡镜像首次启动会运行 `opi3lts-expand-storage`。脚本用 `/proc/self/mountinfo` 里根文件系统的设备号，经 `/sys/dev/block` 反查根分区及其父磁盘，因此不依赖 `/dev/root`（procd 会把 `/dev` 换成新的 tmpfs，只按 sysfs 建节点），也不写死设备名；只有查不到时才回退到按 `root=PARTUUID` 的分区号扫描。preinit 阶段先在 `mount_root` 之前扩分区；根分区正在使用、内核无法重读分区表时，脚本会先校验盘上分区表已经到达卡尾，再重启一次，让下一次启动直接读到新分区表，所以首次启动可能自动重启一次。系统挂载 overlay 后，S99 阶段才扩展 ext4/f2fs 文件系统。squashfs 镜像会扩展其可写 overlay，ext4 镜像会直接扩展根文件系统。只有确认根分区真的占满整张卡之后才会写 `/etc/opi3lts-storage-expanded`，避免一次空扩容就被标记成"已完成"而永久禁用扩容。镜像本身仍保持小体积，不能靠制作 8GB 的 squashfs 解决空间问题。用 balenaEtcher 或 `dd` 写入不同容量的卡后，可用下面的命令确认扩容已经完成：
 
 ```sh
 logread -e opi3lts-expand-storage

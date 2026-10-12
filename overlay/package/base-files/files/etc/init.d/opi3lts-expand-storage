@@ -4,9 +4,14 @@
 # the same partition and exposes it through a loop device.  For an ext4 image,
 # the root filesystem is the partition itself.  Both layouts are produced by
 # the Orange Pi 3 LTS image targets.
+#
+# Never set USE_PROCD here.  /etc/rc.common enables procd with [ -n "$USE_PROCD" ],
+# so even USE_PROCD=0 makes it source /lib/functions/procd.sh and replace the
+# start() below with a procd wrapper that only calls start_service().  With
+# USE_PROCD=0 this file became a no-op: the expansion never ran in preinit or
+# from /etc/rc.d/S99.
 
 START=99
-USE_PROCD=0
 
 . /lib/functions.sh
 
@@ -24,25 +29,48 @@ block_start() {
 	cat "/sys/class/block/$device/start" 2>/dev/null || printf '0\n'
 }
 
+# Device number ("major:minor") of the filesystem mounted at $1, empty when that
+# mount point is not backed by a block device.
+mountinfo_device() {
+	awk -v wanted="$1" '$5 == wanted { print $3; exit }' /proc/self/mountinfo 2>/dev/null
+}
+
+# Resolve the root partition from the device number of the read-only root
+# filesystem: /rom once mount_root has pivoted the overlay, / during preinit.
+# /sys/dev/block/MAJ:MIN names the partition without needing a matching node in
+# /dev: procd replaces /dev with a fresh tmpfs and only creates nodes for the
+# devices it found in sysfs, so the kernel's own /dev/root is gone by the time
+# preinit runs.
+sysfs_root_partition() {
+	local mountpoint device major minor resolved
+
+	for mountpoint in /rom /; do
+		device=$(mountinfo_device "$mountpoint")
+		[ -n "$device" ] || continue
+		major=${device%%:*}
+		minor=${device##*:}
+		case "$major:$minor" in
+			*[!0-9:]*|:*) continue ;;
+		esac
+		resolved=$(readlink -f "/sys/dev/block/$major:$minor" 2>/dev/null)
+		[ -n "$resolved" ] || continue
+		# Only a partition carries this attribute; a whole disk does not.
+		[ -e "$resolved/partition" ] || continue
+		printf '/dev/%s\n' "${resolved##*/}"
+		return 0
+	done
+
+	return 1
+}
+
 root_partition() {
-	local path candidate uuid part_number candidate_number
+	local uuid part_number candidate candidate_number
 
-	# OpenWrt's mount_root resolves /dev/root to the actual partition. This is
-	# available on the target image and avoids requiring blkid or udev's
-	# /dev/disk/by-partuuid hierarchy.
-	path=$(readlink -f /dev/root 2>/dev/null || true)
-	case "$path" in
-		/dev/*)
-			if [ -b "$path" ] && [ -s "/sys/class/block/${path##*/}/partition" ]; then
-				printf '%s\n' "$path"
-				return 0
-			fi
-			;;
-	esac
+	sysfs_root_partition && return 0
 
-	# Fallback for systems without /dev/root.  The low byte of an MBR
-	# PARTUUID is the partition number; use it to find the actual partition
-	# instead of assuming that rootfs is partition 2.
+	# Fallback for a root= that names a PARTUUID.  The low byte of an MBR
+	# PARTUUID is the partition number; scan the candidates instead of assuming
+	# that the rootfs is partition 2 of the first mmc device.
 	uuid=$(sed -n 's/.*root=PARTUUID=[^ -]*-\([0-9A-Fa-f][0-9A-Fa-f]\).*/\1/p' /proc/cmdline)
 	part_number=$(printf '%s\n' "$uuid" | sed 's/^0*//')
 	[ -n "$part_number" ] || return 1
@@ -53,6 +81,7 @@ root_partition() {
 		printf '%s\n' "$candidate"
 		return 0
 	done
+
 	return 1
 }
 
@@ -74,21 +103,23 @@ partition_table_sectors() {
 					exit
 				}
 			}
-		}
-	}'
+		}'
+}
+
+# True when $1 already reaches the end of the card, allowing for 1 MiB of
+# alignment slack against the size $2 computed from the block geometry.
+partition_spans_card() {
+	local size
+	size=$(block_sectors "$1")
+	[ -n "$size" ] && [ "$size" -ge "$(( $2 - 2048 ))" ]
 }
 
 start() {
-	local rootpart disk root_type overlaydev overlay_type tool board resize_tool
+	local rootpart disk root_type overlaydev overlay_type resize_tool
 	local root_name root_sys disk_name part_number part_sectors disk_sectors
-	local part_start target_sectors new_part_sectors table_sectors
+	local part_start target_sectors new_part_sectors disk_table_after
 
 	[ -e "$MARKER" ] && return 0
-	board=$(board_name 2>/dev/null || true)
-	[ "$board" = "xunlong,orangepi-3-lts" ] || {
-		logger -t opi3lts-expand-storage "unsupported board: $board"
-		return 0
-	}
 	for tool in sfdisk partx; do
 		command -v "$tool" >/dev/null 2>&1 || {
 			logger -t opi3lts-expand-storage "$tool is unavailable; will retry"
@@ -109,26 +140,26 @@ start() {
 	disk_name=$(basename "$(dirname "$(readlink -f "$root_sys" 2>/dev/null || true)")")
 	disk="/dev/$disk_name"
 	part_number=$(cat "$root_sys/partition" 2>/dev/null || true)
-	[ -n "$disk_name" ] || {
-		logger -t opi3lts-expand-storage "cannot determine parent disk for $rootpart"
-		return 0
-	}
-	case "$part_number" in
-		''|*[!0-9]*|0)
-			logger -t opi3lts-expand-storage "cannot determine disk or partition number for $rootpart"
+	case "$disk_name" in
+		''|*[!0-9a-zA-Z]*)
+			logger -t opi3lts-expand-storage "cannot determine parent disk for $rootpart"
 			return 0
 			;;
 	esac
+	[ "$part_number" -gt 0 ] 2>/dev/null || {
+		logger -t opi3lts-expand-storage "cannot determine partition number for $rootpart"
+		return 0
+	}
 	[ -b "$disk" ] || {
-		logger -t opi3lts-expand-storage "parent block device not found for $rootpart"
+		logger -t opi3lts-expand-storage "parent block device $disk not found for $rootpart"
 		return 0
 	}
 
 	# Do not resize the filesystem based only on sfdisk's exit status.  With a
 	# mounted root partition the kernel can keep the old in-memory table while
-	# sfdisk has already written the new table to the card.  Growing loop0 in
-	# that state creates an ext4 filesystem larger than its partition and makes
-	# the next boot fail with "bad geometry".
+	# sfdisk has already written the new table to the card.  Growing the overlay
+	# in that state creates a filesystem larger than its partition and makes the
+	# next boot fail with "bad geometry".
 	part_sectors=$(block_sectors "$rootpart")
 	disk_sectors=$(block_sectors "$disk")
 	part_start=$(block_start "$rootpart")
@@ -145,21 +176,22 @@ start() {
 	fi
 
 	if [ "$part_sectors" -lt "$target_sectors" ]; then
-		# A blank start with '+' size preserves the current partition start and consumes
-		# all free sectors after it. --no-reread avoids failing while /rom is open.
+		# A blank start with '+' size preserves the current partition start and
+		# consumes all free sectors after it. --no-reread avoids inspecting the
+		# in-use device; the kernel table is refreshed below instead.
 		if ! printf ',+\n' | sfdisk --no-reread -N "$part_number" "$disk" >/tmp/opi3lts-sfdisk.log 2>&1; then
-			logger -t opi3lts-expand-storage "partition resize failed: $(cat /tmp/opi3lts-sfdisk.log)"
+			logger -t opi3lts-expand-storage "partition resize failed: $(cat /tmp/opi3lts-sfdisk.log 2>/dev/null)"
 			return 0
 		fi
 		sync
-		table_sectors=$(partition_table_sectors "$disk" "$rootpart")
-		case "$table_sectors" in
+		disk_table_after=$(partition_table_sectors "$disk" "$rootpart")
+		case "$disk_table_after" in
 			''|*[!0-9]*)
 				logger -t opi3lts-expand-storage "cannot verify the on-disk partition table for $rootpart"
 				return 0
 				;;
 		esac
-		if [ "$table_sectors" -lt "$target_sectors" ]; then
+		if [ "$disk_table_after" -lt "$target_sectors" ]; then
 			logger -t opi3lts-expand-storage "on-disk partition table did not reach the end of $disk"
 			return 0
 		fi
@@ -167,29 +199,30 @@ start() {
 		sleep 1
 		new_part_sectors=$(block_sectors "$rootpart")
 		if [ "$new_part_sectors" -lt "$target_sectors" ]; then
-			# /etc may still be the read-only SquashFS during preinit, so no
-			# persistent marker can be relied on here. Reboot only after sfdisk's
-			# on-disk table was verified above; next boot reads it afresh.
+			# The partition is mounted, so the kernel cannot re-read the table
+			# now.  The on-disk table was verified above and the kernel always
+			# reads the partition table when it resolves root=PARTUUID, so a
+			# reboot leaves a boot with the grown partition and no loop.
 			sync
-			logger -t opi3lts-expand-storage "partition table written but kernel still has old size; rebooting before mount_root"
+			logger -t opi3lts-expand-storage "partition table written but kernel still reports $new_part_sectors of $target_sectors sectors; rebooting before mount_root"
 			(sleep 1; reboot) >/dev/null 2>&1 &
 			return 0
 		fi
+		logger -t opi3lts-expand-storage "kernel accepted the grown partition on $disk ($new_part_sectors sectors)"
 	fi
 
-	# In preinit there is no mounted /rom or / yet. The partition phase above is
-	# still safe there; mount_root will then create the loop-backed rootfs_data
-	# against the new partition size. The S99 invocation later performs the
+	# In preinit there is no mounted /rom or / yet: the partition phase above is
+	# still safe there, and mount_root then creates the loop-backed rootfs_data
+	# against the new partition size.  The S99 invocation performs the
 	# filesystem resize after the overlay is mounted.
 	root_type=$(awk '$2 == "/rom" { print $3; exit }' /proc/mounts)
 	[ -n "$root_type" ] || root_type=$(awk '$2 == "/" { print $3; exit }' /proc/mounts)
-	[ -n "$root_type" ] || return 0
 	case "$root_type" in
 		ext4|squashfs) : ;;
 		*)
-		logger -t opi3lts-expand-storage "unsupported root filesystem on $rootpart; will retry"
-		return 0
-		;;
+			logger -t opi3lts-expand-storage "root filesystem ${root_type:-unknown} not mounted yet; will retry"
+			return 0
+			;;
 	esac
 
 	if [ "$root_type" = squashfs ]; then
@@ -199,7 +232,7 @@ start() {
 		}
 		overlaydev=$(awk '$2 == "/overlay" { print $1; exit }' /proc/mounts)
 		[ -n "$overlaydev" ] || {
-			logger -t opi3lts-expand-storage 'squashfs overlay device not found; will retry after reboot'
+			logger -t opi3lts-expand-storage 'squashfs overlay is not mounted yet; will retry'
 			return 0
 		}
 		overlay_type=$(awk '$2 == "/overlay" { print $3; exit }' /proc/mounts)
@@ -216,30 +249,40 @@ start() {
 				fi
 				;;
 			*)
-			logger -t opi3lts-expand-storage "unsupported overlay filesystem $overlay_type on $overlaydev; will retry"
-			return 0
-			;;
+				logger -t opi3lts-expand-storage "unsupported overlay filesystem ${overlay_type:-unknown} on $overlaydev; will retry"
+				return 0
+				;;
 		esac
 
-		# The loop device was created before the partition grew. Refresh its size
-		# and perform an online ext4 expansion.  The partition-size check above
-		# guarantees that the backing partition is already large enough.
+		# The loop device was created before the partition grew.  Refresh its
+		# size and perform an online expansion.
 		losetup -c "$overlaydev" >/dev/null 2>&1 || true
-		if "$resize_tool" "$overlaydev" >/tmp/opi3lts-resizefs.log 2>&1; then
-			touch "$MARKER"
-			logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
-		else
-			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resizefs.log)"
+		if ! "$resize_tool" "$overlaydev" >/tmp/opi3lts-resizefs.log 2>&1; then
+			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resizefs.log 2>/dev/null)"
+			return 0
 		fi
+		if ! partition_spans_card "$rootpart" "$target_sectors"; then
+			# resize2fs also succeeds when there is nothing to grow.  Recording
+			# success here would disable this script forever on a card that was
+			# never expanded, which is what the previous marker logic did.
+			logger -t opi3lts-expand-storage "filesystem on $overlaydev is not backed by the full card yet; will retry"
+			return 0
+		fi
+		touch "$MARKER"
+		logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
 		return 0
 	fi
 
 	# The ext4 image has no separate rootfs_data loop device.  resize2fs can
 	# grow the mounted root filesystem online after the partition table grows.
-	if resize2fs "$rootpart" >/tmp/opi3lts-resize2fs.log 2>&1; then
-		touch "$MARKER"
-		logger -t opi3lts-expand-storage "expanded $rootpart using all space on $disk"
-	else
-		logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log)"
+	if ! resize2fs "$rootpart" >/tmp/opi3lts-resize2fs.log 2>&1; then
+		logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log 2>/dev/null)"
+		return 0
 	fi
+	if ! partition_spans_card "$rootpart" "$target_sectors"; then
+		logger -t opi3lts-expand-storage "$rootpart does not span the card yet; will retry"
+		return 0
+	fi
+	touch "$MARKER"
+	logger -t opi3lts-expand-storage "expanded $rootpart using all space on $disk"
 }

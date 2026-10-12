@@ -84,6 +84,14 @@ grep -q 'resize2fs' "$tmpdir/expand-script" || {
 	echo 'Released image lacks the overlay filesystem expansion step' >&2
 	exit 1
 }
+# /etc/rc.common enables procd for any non-empty USE_PROCD, including "0".  That
+# replaces the script's own start() with a procd wrapper around start_service(),
+# which this script does not define, so the whole expansion silently becomes a
+# no-op.  Catch that regression here instead of on a flashed card.
+if grep -qE '^[[:space:]]*USE_PROCD=' "$tmpdir/expand-script"; then
+	echo 'Expansion script sets USE_PROCD; /etc/rc.common would replace start() with a no-op procd wrapper' >&2
+	exit 1
+fi
 if grep -qE '/dev/mmcblk0|/home/ceaser' "$tmpdir/expand-script"; then
 	echo 'Released image contains a hardcoded development device or host path' >&2
 	exit 1
