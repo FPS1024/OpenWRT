@@ -12,60 +12,47 @@ USE_PROCD=0
 
 MARKER=/etc/opi3lts-storage-expanded
 
-partition_type() {
-	local path fstype magic
-	path="$1"
-	fstype=$(blkid -o value -s TYPE "$path" 2>/dev/null || true)
-	case "$fstype" in
-		ext4|squashfs)
-			printf '%s\n' "$fstype"
-			return 0
+root_partition() {
+	local path candidate uuid
+
+	# OpenWrt's mount_root resolves /dev/root to the actual partition. This is
+	# available on the target image and avoids requiring blkid or udev's
+	# /dev/disk/by-partuuid hierarchy.
+	path=$(readlink -f /dev/root 2>/dev/null || true)
+	case "$path" in
+		/dev/mmcblk*p2|/dev/sd*p2|/dev/nvme*n1p2)
+			[ -b "$path" ] && {
+				printf '%s\n' "$path"
+				return 0
+			}
 			;;
 	esac
 
-	# blkid can miss squashfs when the partition also contains the writable
-	# tail.  Check its on-disk magic directly as a fallback.
-	magic=$(dd if="$path" bs=1 count=4 2>/dev/null | od -An -tx1 | tr -d ' \n')
-	[ "$magic" = "68737173" ] && {
-		printf '%s\n' squashfs
-		return 0
-	}
-	return 1
-}
-
-root_partition() {
-	local uuid path candidate
-
 	uuid=$(sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline)
-	if [ -n "$uuid" ] && [ -e "/dev/disk/by-partuuid/$uuid" ]; then
-		path=$(readlink -f "/dev/disk/by-partuuid/$uuid" 2>/dev/null || true)
-		case "$path" in
-			/dev/mmcblk*p2|/dev/sd*p2|/dev/nvme*n1p2)
-				[ -b "$path" ] && {
-					printf '%s\n' "$path"
-					return 0
-				}
-				;;
-		esac
-	fi
+	case "$uuid" in
+		*-02) : ;;
+		*) return 1 ;;
+	esac
 
-	# Fallback for bootloaders that do not expose a usable PARTUUID symlink.
+	# Fallback for systems without /dev/root or a PARTUUID symlink. The H6
+	# factory image always uses partition 2 for the root filesystem.
 	for candidate in /dev/mmcblk*p2 /dev/sd*p2 /dev/nvme*n1p2; do
 		[ -b "$candidate" ] || continue
-		if partition_type "$candidate" >/dev/null; then
-			printf '%s\n' "$candidate"
-			return 0
-		fi
+		printf '%s\n' "$candidate"
+		return 0
 	done
 	return 1
 }
 
 start() {
-	local rootpart disk root_type overlaydev overlay_type
+	local rootpart disk root_type overlaydev overlay_type tool board
 
 	[ -e "$MARKER" ] && return 0
-	[ "$(board_name 2>/dev/null || true)" = "xunlong,orangepi-3-lts" ] || return 0
-	local tool
+	board=$(board_name 2>/dev/null || true)
+	[ "$board" = "xunlong,orangepi-3-lts" ] || {
+		logger -t opi3lts-expand-storage "unsupported board: $board"
+		return 0
+	}
 	for tool in sfdisk partx resize2fs; do
 		command -v "$tool" >/dev/null 2>&1 || {
 			logger -t opi3lts-expand-storage "$tool is unavailable; will retry"
@@ -77,10 +64,14 @@ start() {
 		logger -t opi3lts-expand-storage 'root partition not found; will retry'
 		return 0
 	}
-	root_type=$(partition_type "$rootpart") || {
+	root_type=$(awk '$2 == "/rom" { print $3; exit }' /proc/mounts)
+	case "$root_type" in
+		ext4|squashfs) : ;;
+		*)
 		logger -t opi3lts-expand-storage "unsupported root filesystem on $rootpart; will retry"
 		return 0
-	}
+		;;
+	esac
 
 	case "$rootpart" in
 		/dev/mmcblk*p2) disk=${rootpart%p2} ;;
