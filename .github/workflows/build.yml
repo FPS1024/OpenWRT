@@ -254,6 +254,7 @@ jobs:
           test -s "$squashfs_image" || { echo "SquashFS image is missing: $squashfs_image"; exit 1; }
           squashfs_bytes="$(wc -c < "$squashfs_image")"
           [ "$squashfs_bytes" -lt 268435456 ] || { echo "SquashFS image is unexpectedly large (${squashfs_bytes} bytes); refusing an artificial multi-gigabyte image"; exit 1; }
+          sh "$GITHUB_WORKSPACE/scripts/verify-image.sh" "$OPENWRT_DIR" "$OPENWRT_DIR/$squashfs_image"
           for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
             grep -q "^${package} " "$manifest" || { echo "Kernel-matched ${package} package is missing from the image"; exit 1; }
           done

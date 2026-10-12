@@ -11,10 +11,6 @@ USE_PROCD=0
 . /lib/functions.sh
 
 MARKER=/etc/opi3lts-storage-expanded
-# Partition-table changes may not be visible to the running kernel while the
-# root partition is mounted.  Keep this separate from MARKER: the filesystem
-# must not be grown until a later boot has exposed the larger partition.
-PARTITION_MARKER=/etc/opi3lts-storage-partition-expanded
 
 block_sectors() {
 	local device="$1"
@@ -171,17 +167,12 @@ start() {
 		sleep 1
 		new_part_sectors=$(block_sectors "$rootpart")
 		if [ "$new_part_sectors" -lt "$target_sectors" ]; then
-			if [ ! -e "$PARTITION_MARKER" ]; then
-				if ! touch "$PARTITION_MARKER"; then
-					logger -t opi3lts-expand-storage 'partition table is not visible and the state marker cannot be written; leaving filesystem unchanged'
-					return 0
-				fi
-				sync
-				logger -t opi3lts-expand-storage "partition table written; rebooting before filesystem resize"
-				(sleep 1; reboot) >/dev/null 2>&1 &
-				return 0
-			fi
-			logger -t opi3lts-expand-storage "partition table is not visible to the kernel after reboot; filesystem resize deferred"
+			# /etc may still be the read-only SquashFS during preinit, so no
+			# persistent marker can be relied on here. Reboot only after sfdisk's
+			# on-disk table was verified above; next boot reads it afresh.
+			sync
+			logger -t opi3lts-expand-storage "partition table written but kernel still has old size; rebooting before mount_root"
+			(sleep 1; reboot) >/dev/null 2>&1 &
 			return 0
 		fi
 	fi
@@ -236,7 +227,6 @@ start() {
 		losetup -c "$overlaydev" >/dev/null 2>&1 || true
 		if "$resize_tool" "$overlaydev" >/tmp/opi3lts-resizefs.log 2>&1; then
 			touch "$MARKER"
-			rm -f "$PARTITION_MARKER"
 			logger -t opi3lts-expand-storage "expanded $overlaydev using all space on $disk"
 		else
 			logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resizefs.log)"
@@ -248,7 +238,6 @@ start() {
 	# grow the mounted root filesystem online after the partition table grows.
 	if resize2fs "$rootpart" >/tmp/opi3lts-resize2fs.log 2>&1; then
 		touch "$MARKER"
-		rm -f "$PARTITION_MARKER"
 		logger -t opi3lts-expand-storage "expanded $rootpart using all space on $disk"
 	else
 		logger -t opi3lts-expand-storage "filesystem resize deferred: $(cat /tmp/opi3lts-resize2fs.log)"

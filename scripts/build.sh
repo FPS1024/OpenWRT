@@ -314,6 +314,7 @@ SQUASHFS_BYTES=$(wc -c < "$SQUASHFS_IMAGE")
 	echo "SquashFS image is unexpectedly large (${SQUASHFS_BYTES} bytes); refusing an artificial multi-gigabyte image" >&2
 	exit 1
 }
+sh "$HERE/scripts/verify-image.sh" "$OW_DIR" "$OW_DIR/$SQUASHFS_IMAGE"
 for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Kernel-matched ${package} package is missing from the image" >&2; exit 1; }
 done
