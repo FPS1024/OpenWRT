@@ -61,6 +61,11 @@ if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt
 	exit 1
 fi
 cat "$LOG_DIR/argon-sources.txt"
+if ! sh "$HERE/scripts/prepare-openclash.sh" "$OW_DIR" > "$LOG_DIR/openclash-source.txt" 2>&1; then
+	cat "$LOG_DIR/openclash-source.txt"
+	exit 1
+fi
+cat "$LOG_DIR/openclash-source.txt"
 
 if [ ! -s .config ] \
 	|| ! grep -qx 'CONFIG_TARGET_sunxi=y' .config \
@@ -100,7 +105,28 @@ CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
 CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+# Native utilities requested for on-device maintenance/builds.
+CONFIG_PACKAGE_git=y
+CONFIG_PACKAGE_git-http=y
+CONFIG_PACKAGE_make=y
+CONFIG_PACKAGE_gcc=y
+CONFIG_PACKAGE_binutils=y
+# OpenWrt 24.10 has no target packages named cmake/build-essential;
+# gcc/binutils/make are the available target-side toolchain pieces.
+CONFIG_PACKAGE_sfdisk=y
+CONFIG_PACKAGE_partx-utils=y
+CONFIG_PACKAGE_losetup=y
+CONFIG_PACKAGE_resize2fs=y
 EOF
+fi
+
+if [ -f "$OW_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
+	# The app is optional; its dependencies below are still mandatory.
+	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+	printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
+else
+	sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+	printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
 fi
 
 # Keep the web UI selected in an existing incremental build tree too.
@@ -132,7 +158,16 @@ for symbol in \
 	PACKAGE_luci-i18n-argon-config-zh-cn \
 	PACKAGE_luci-i18n-base-zh-cn \
 	PACKAGE_luci-i18n-firewall-zh-cn \
-	PACKAGE_luci-i18n-package-manager-zh-cn; do
+	PACKAGE_luci-i18n-package-manager-zh-cn \
+	PACKAGE_git \
+	PACKAGE_git-http \
+	PACKAGE_make \
+	PACKAGE_gcc \
+	PACKAGE_binutils \
+	PACKAGE_sfdisk \
+	PACKAGE_partx-utils \
+	PACKAGE_losetup \
+	PACKAGE_resize2fs; do
 	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
 	printf 'CONFIG_%s=y\n' "$symbol" >> .config
 done
@@ -150,13 +185,24 @@ grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is no
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
+if [ -f "$OW_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
+	grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config || { echo 'OpenClash was not selected by defconfig' >&2; exit 1; }
+fi
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 
 echo ">> Build firmware (make reuses valid outputs and rebuilds any missing dependencies)"
 if ! run_logged "$LOG_DIR/build.log" make -j"$JOBS"; then
-	if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
+	if [ -f package/luci-app-openclash-prebuilt/Makefile ] && \
+		grep -Eq 'luci-app-openclash(-prebuilt)?|package/luci-app-openclash' "$LOG_DIR/build.log"; then
+		echo ">> OpenClash package failed; retrying the image without optional OpenClash"
+		rm -rf package/luci-app-openclash-prebuilt
+		sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+		printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+		run_logged "$LOG_DIR/defconfig-without-openclash.log" make defconfig
+		run_logged "$LOG_DIR/build-without-openclash.log" make -j"$JOBS"
+	elif grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
 		df -h > "$LOG_DIR/disk-after-build-failure.txt"
 		df -i >> "$LOG_DIR/disk-after-build-failure.txt"
 		echo ">> Retry target/linux/install serially with verbose output"
@@ -179,11 +225,17 @@ for package in \
 	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
 	dnsmasq-full libnettle8 libnetfilter-conntrack3 \
 	bash curl ca-bundle ip-full ruby ruby-yaml unzip \
+	git git-http make gcc binutils sfdisk partx-utils losetup resize2fs \
 	luci-theme-argon luci-app-argon-config \
 	luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
 	luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Expected web-admin package is missing: $package" >&2; exit 1; }
 done
+if grep -q '^luci-app-openclash ' "$MANIFEST"; then
+	echo 'OpenClash package was included in the image'
+else
+	echo 'WARNING: OpenClash release package was unavailable; continuing without optional app'
+fi
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }

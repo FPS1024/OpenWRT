@@ -49,6 +49,8 @@ jobs:
           ./scripts/feeds install -a -p luci > "$LOG_DIR/feeds-install-luci.log" 2>&1 || { cat "$LOG_DIR/feeds-install-luci.log"; exit 1; }
           sh "$GITHUB_WORKSPACE/scripts/prepare-argon.sh" "$OPENWRT_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1 || { cat "$LOG_DIR/argon-sources.txt"; exit 1; }
           cat "$LOG_DIR/argon-sources.txt"
+          sh "$GITHUB_WORKSPACE/scripts/prepare-openclash.sh" "$OPENWRT_DIR" > "$LOG_DIR/openclash-source.txt" 2>&1 || { cat "$LOG_DIR/openclash-source.txt"; exit 1; }
+          cat "$LOG_DIR/openclash-source.txt"
 
       - name: Apply overlay and configure
         run: |
@@ -89,13 +91,36 @@ jobs:
           CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-firewall-zh-cn=y
           CONFIG_PACKAGE_luci-i18n-package-manager-zh-cn=y
+          # Native utilities requested for on-device maintenance/builds.
+          CONFIG_PACKAGE_git=y
+          CONFIG_PACKAGE_git-http=y
+          CONFIG_PACKAGE_make=y
+          CONFIG_PACKAGE_gcc=y
+          CONFIG_PACKAGE_binutils=y
+          # OpenWrt 24.10 has no target packages named cmake/build-essential;
+          # gcc/binutils/make are the available target-side toolchain pieces.
+          CONFIG_PACKAGE_sfdisk=y
+          CONFIG_PACKAGE_partx-utils=y
+          CONFIG_PACKAGE_losetup=y
+          CONFIG_PACKAGE_resize2fs=y
           EOF
+          if [ -f "$OPENWRT_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
+            printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
+          else
+            printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+          fi
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
           grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled'; exit 1; }
           grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig'; exit 1; }
+          grep -qx 'CONFIG_PACKAGE_git=y' .config || { echo 'git was not selected by defconfig'; exit 1; }
+          grep -qx 'CONFIG_PACKAGE_make=y' .config || { echo 'make was not selected by defconfig'; exit 1; }
+          grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
+          if [ -f "$OPENWRT_DIR/package/luci-app-openclash-prebuilt/Makefile" ]; then
+            grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config || { echo 'OpenClash was not selected by defconfig'; exit 1; }
+          fi
           for package in \
             luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
             luci-theme-argon luci-app-argon-config \
@@ -129,7 +154,15 @@ jobs:
           cd "$OPENWRT_DIR"
           if ! make -j"$(nproc)" > "$LOG_DIR/build.log" 2>&1; then
             cat "$LOG_DIR/build.log"
-            if grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
+            if [ -f package/luci-app-openclash-prebuilt/Makefile ] && \
+               grep -Eq 'luci-app-openclash(-prebuilt)?|package/luci-app-openclash' "$LOG_DIR/build.log"; then
+              echo "OpenClash package failed; retrying the image without optional OpenClash"
+              rm -rf package/luci-app-openclash-prebuilt
+              sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+              printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+              make defconfig > "$LOG_DIR/defconfig-without-openclash.log" 2>&1 || { cat "$LOG_DIR/defconfig-without-openclash.log"; exit 1; }
+              make -j"$(nproc)" > "$LOG_DIR/build-without-openclash.log" 2>&1 || { cat "$LOG_DIR/build-without-openclash.log"; exit 1; }
+            elif grep -q 'ERROR: target/linux failed to build' "$LOG_DIR/build.log"; then
               df -h > "$LOG_DIR/disk-after-build-failure.txt"
               df -i >> "$LOG_DIR/disk-after-build-failure.txt"
               echo "Retrying target/linux/install serially with verbose output for diagnosis"
@@ -150,11 +183,17 @@ jobs:
             luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
             dnsmasq-full libnettle8 libnetfilter-conntrack3 \
             bash curl ca-bundle ip-full ruby ruby-yaml unzip \
+            git git-http make gcc binutils sfdisk partx-utils losetup resize2fs \
             luci-theme-argon luci-app-argon-config \
             luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
             luci-i18n-firewall-zh-cn luci-i18n-package-manager-zh-cn; do
             grep -q "^${package} " "$manifest" || { echo "Expected web-admin package is missing: $package"; exit 1; }
           done
+          if grep -q '^luci-app-openclash ' "$manifest"; then
+            echo 'OpenClash package was included in the image'
+          else
+            echo 'WARNING: OpenClash release package was unavailable; continuing without optional app'
+          fi
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
           grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated'; cat "$LOG_DIR/images.txt"; exit 1; }
           for package in kmod-tun kmod-inet-diag kmod-nft-tproxy kmod-nf-conntrack-netlink; do
@@ -185,7 +224,10 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
-          if-no-files-found: error
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-app-openclash*.ipk
+          # The OpenClash IPK is optional; the build step validates all
+          # mandatory image and driver outputs before this upload.
+          if-no-files-found: warn
 
       - name: Upload build diagnostics
         if: always()
@@ -194,3 +236,43 @@ jobs:
           name: build-diagnostics
           path: ${{ env.LOG_DIR }}/
           if-no-files-found: warn
+
+  notify:
+    name: Email build result
+    needs: build
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check SMTP secrets
+        id: smtp
+        env:
+          SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+        run: |
+          if [ -n "$SMTP_USERNAME" ] && [ -n "$SMTP_PASSWORD" ]; then
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'enabled=false' >> "$GITHUB_OUTPUT"
+            echo 'SMTP_USERNAME/SMTP_PASSWORD are not configured; email notification skipped.'
+          fi
+
+      - name: Send build result email
+        if: steps.smtp.outputs.enabled == 'true'
+        uses: dawidd6/action-send-mail@v18
+        with:
+          server_address: ${{ secrets.SMTP_SERVER || 'smtp-mail.outlook.com' }}
+          server_port: 587
+          secure: false
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: '[OpenWrt Orange Pi 3 LTS] build ${{ needs.build.result }}'
+          to: ceaser.k.w@outlook.com
+          from: ${{ secrets.SMTP_USERNAME }}
+          body: |
+            OpenWrt Orange Pi 3 LTS GitHub Actions build result: ${{ needs.build.result }}
+
+            Repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            The workflow's firmware and diagnostics artifacts are available on the run page.
