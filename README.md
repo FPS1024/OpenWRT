@@ -50,7 +50,7 @@ GitHub Actions 可选发送构建通知邮件。到仓库 **Settings → Secrets
 
 ## 刷写
 
-解压下载的 `.img.gz`，确认 `/dev/sdX` 是 SD 卡设备后写入：
+解压下载的 `.img.gz`，确认 `/dev/sdX` 是 SD 卡设备后写入（可以用BalenaEcher等工具直接刷入），刷入后自动占满SD卡空间：
 
 ```sh
 gunzip -k openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img.gz
