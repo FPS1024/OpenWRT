@@ -57,6 +57,17 @@ EOF
 	return 1
 }
 
+# Node.js 24 requires a GCC 12.2 or newer host toolchain.  The node package
+# prefers gcc-12 and g++-12 but only switches when BOTH are present: setting
+# one without the other leaves CXX_host empty, and gyp then emits compile lines
+# that start with the compiler's arguments instead of a compiler, surfacing
+# much later as "make[4]: o: No such file or directory".  Fail here instead of
+# after the clone and toolchain stages.
+if ! command -v gcc-12 >/dev/null 2>&1 || ! command -v g++-12 >/dev/null 2>&1; then
+	echo 'Node.js 24 needs gcc-12 and g++-12 on the build host (apt install gcc-12 g++-12)' >&2
+	exit 1
+fi
+
 if [ ! -d "$OW_DIR/.git" ]; then
 	echo ">> Cloning OpenWrt at $OW_COMMIT"
 	if [ -e "$OW_DIR" ] && [ -n "$(find "$OW_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -72,15 +83,22 @@ fi
 git -C "$OW_DIR" checkout --detach "$OW_COMMIT"
 echo "OpenWrt: $(git -C "$OW_DIR" rev-parse HEAD)"
 
-echo ">> Applying project overlay"
-sh "$HERE/scripts/apply-overlay.sh" "$OW_DIR"
-
 cd "$OW_DIR"
 
 echo ">> Update and install LuCI package feeds"
 run_logged "$LOG_DIR/feeds-update.log" ./scripts/feeds update packages luci
 run_logged "$LOG_DIR/feeds-install-packages.log" ./scripts/feeds install -a -p packages
 run_logged "$LOG_DIR/feeds-install-luci.log" ./scripts/feeds install -a -p luci
+
+# The overlay must land after the feeds step.  `feeds update` runs
+# `git pull --ff-only` inside feeds/packages, which either refuses to run or
+# discards the changes when the overlay has already replaced a file under
+# feeds/.  Overlay targets are either core-tree paths (unaffected by feeds) or
+# deliberate replacements of a feed package, so applying it last is correct
+# for both.
+echo ">> Applying project overlay"
+sh "$HERE/scripts/apply-overlay.sh" "$OW_DIR"
+
 if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt" 2>&1; then
 	cat "$LOG_DIR/argon-sources.txt"
 	exit 1
@@ -128,6 +146,18 @@ CONFIG_PACKAGE_ip-full=y
 CONFIG_PACKAGE_ruby=y
 CONFIG_PACKAGE_ruby-yaml=y
 CONFIG_PACKAGE_unzip=y
+# Node.js 24 for the target.  The package definition lives in
+# overlay/feeds/packages/lang/node because the pinned openwrt-24.10 packages
+# feed only ships Node 20.  Node 24 requires GCC 12.2 or newer for its host
+# toolset, so the build host needs both gcc-12 and g++-12; the preflight check
+# above fails early when either front end is missing.
+#
+# Compiling Node costs about five hours from a clean tree.  The GitHub Actions
+# workflow mirrors this selection and starts from a fresh checkout every run
+# with only dl/ cached, so that job runs close to its six-hour limit.
+CONFIG_PACKAGE_node=y
+CONFIG_PACKAGE_node-npm=y
+CONFIG_NODEJS_ICU_SMALL=y
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -190,6 +220,9 @@ for symbol in \
 	PACKAGE_ruby \
 	PACKAGE_ruby-yaml \
 	PACKAGE_unzip \
+	PACKAGE_node \
+	PACKAGE_node-npm \
+	NODEJS_ICU_SMALL \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -246,6 +279,17 @@ if grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
 	echo 'OpenClash app must not be selected for the factory image' >&2
 	exit 1
 fi
+grep -qx 'CONFIG_PACKAGE_node=y' .config || {
+	echo 'Node.js is not selected for the factory image' >&2
+	exit 1
+}
+# The node package exposes a Kconfig choice for its i18n backend.  Only
+# small-icu is self-contained: system-icu would pull icu and icu-full-data into
+# the image, and none would break any dependency that expects Intl.
+grep -qx 'CONFIG_NODEJS_ICU_SMALL=y' .config || {
+	echo 'Node.js was not configured with the small-icu i18n backend' >&2
+	exit 1
+}
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
@@ -281,6 +325,13 @@ test -f "$STORAGE_ROOT/lib/preinit/79_opi3lts_expand_storage" || {
 }
 test -L "$STORAGE_ROOT/etc/rc.d/S99opi3lts-expand-storage" || {
 	echo 'SD-card expansion init script is not enabled at S99' >&2
+	exit 1
+}
+
+# The Node.js runtime is selected in .config above; make sure package/install
+# actually copied it into the image root, so a factory card ships with it.
+test -x "$STORAGE_ROOT/usr/bin/node" || {
+	echo 'Node.js runtime is missing from the image root' >&2
 	exit 1
 }
 

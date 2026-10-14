@@ -22,6 +22,11 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # GitHub-hosted runners cap a job at six hours and that is also the default,
+    # so this cannot be raised.  Node.js 24 has to be compiled from scratch on
+    # every run (only dl/ is cached), which costs several hours and puts this
+    # job close to the limit.
+    timeout-minutes: 360
     env:
       INCLUDE_DEV_TOOLS: ${{ inputs.include_dev_tools && '1' || '0' }}
     steps:
@@ -32,6 +37,20 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           df -h /
+
+      - name: Ensure a GCC 12 host toolchain
+        run: |
+          # Node.js 24 requires GCC 12.2 or newer for its gyp "host" toolset.
+          # The runner's default gcc is 11, and the node package switches to
+          # gcc-12/g++-12 only when BOTH are on PATH -- installing just one
+          # leaves CXX_host empty and gyp then emits compile lines that start
+          # with the compiler's arguments instead of a compiler.
+          if ! command -v gcc-12 >/dev/null 2>&1 || ! command -v g++-12 >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y gcc-12 g++-12
+          fi
+          gcc-12 --version | head -1
+          g++-12 --version | head -1
 
       - name: Clone pinned OpenWrt source
         run: |
@@ -97,6 +116,13 @@ jobs:
           CONFIG_PACKAGE_ruby=y
           CONFIG_PACKAGE_ruby-yaml=y
           CONFIG_PACKAGE_unzip=y
+          # Node.js 24 for the target. The package definition lives in
+          # overlay/feeds/packages/lang/node because the pinned openwrt-24.10
+          # packages feed only ships Node 20. Node 24 needs GCC 12.2 or newer
+          # for its host toolset, which the step above provides.
+          CONFIG_PACKAGE_node=y
+          CONFIG_PACKAGE_node-npm=y
+          CONFIG_NODEJS_ICU_SMALL=y
           CONFIG_PACKAGE_luci-theme-argon=y
           CONFIG_PACKAGE_luci-app-argon-config=y
           CONFIG_LUCI_LANG_zh_Hans=y
@@ -145,6 +171,11 @@ jobs:
             echo 'OpenClash app must not be selected for the factory image'
             exit 1
           fi
+          grep -qx 'CONFIG_PACKAGE_node=y' .config || { echo 'Node.js was not selected by defconfig'; exit 1; }
+          # The node package exposes a Kconfig choice for its i18n backend.
+          # Only small-icu is self-contained: system-icu would pull icu and
+          # icu-full-data into the image, and none breaks anything expecting Intl.
+          grep -qx 'CONFIG_NODEJS_ICU_SMALL=y' .config || { echo 'Node.js was not configured with the small-icu i18n backend'; exit 1; }
           grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
           for package in \
             luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
@@ -224,6 +255,10 @@ jobs:
             echo 'SD-card expansion init script is not enabled at S99'
             exit 1
           }
+          test -x "$storage_root/usr/bin/node" || {
+            echo 'Node.js runtime is missing from the image root'
+            exit 1
+          }
           stage package-index make -j"$JOBS" package/index json_overview_image_info checksum || exit 1
           image_dir=bin/targets/sunxi/cortexa53
           manifest="$image_dir/openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts.manifest"
@@ -232,6 +267,7 @@ jobs:
             luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
             dnsmasq-full libnettle8 libnetfilter-conntrack3 \
             bash curl ca-bundle ip-full ruby ruby-yaml unzip \
+            node node-npm libcares \
             sfdisk partx-utils losetup resize2fs \
             luci-theme-argon luci-app-argon-config \
             luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
@@ -283,6 +319,9 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node_*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node-npm_*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/libcares_*.ipk
           # The image includes OpenClash runtime dependencies, not the app.
           if-no-files-found: warn
 

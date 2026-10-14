@@ -27,6 +27,12 @@ done
 # the two-argument set_wiphy_params callback.
 rm -f "$OW_DIR/package/kernel/uwe5622/patches/080-cfg80211-set-wiphy-params-backport-radio-idx.patch"
 
+# The overlay copies files but never deletes them, so patches that the feeds
+# still ship have to be removed explicitly.  Node 24 replaced this macOS-only
+# patch: its context targets the old gyp make.py template, and this project
+# only ever builds on Linux.
+rm -f "$OW_DIR/feeds/packages/lang/node/patches/007-fix_host_build_on_macos.patch"
+
 # Linux 6.6 receives a backport that makes REALTEK_PHY_HWMON a visible Kconfig
 # option. Since REALTEK_PHY is enabled for sunxi, pin the optional HWMON choice
 # in the kernel config fragment so non-interactive syncconfig does not prompt.
