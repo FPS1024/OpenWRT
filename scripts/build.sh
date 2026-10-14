@@ -121,7 +121,7 @@ if [ ! -s .config ] \
 CONFIG_TARGET_sunxi=y
 CONFIG_TARGET_sunxi_cortexa53=y
 CONFIG_TARGET_sunxi_cortexa53_DEVICE_${DEVICE}=y
-CONFIG_TARGET_ROOTFS_PARTSIZE=104
+CONFIG_TARGET_ROOTFS_PARTSIZE=160
 CONFIG_DEVEL=y
 CONFIG_PER_FEED_REPO=y
 CONFIG_FEED_packages=y
@@ -259,16 +259,24 @@ printf '%s\n' '# CONFIG_PACKAGE_dnsmasq is not set' >> .config
 # Do not let an older incremental tree force the optional ccache host tool.
 sed -i '/^CONFIG_CCACHE=y$/d; /^# CONFIG_CCACHE is not set$/d' .config
 printf '%s\n' '# CONFIG_CCACHE is not set' >> .config
-# Keep the image root partition fixed and small. First boot grows the existing
-# root partition and its filesystem on the actual target device.
+# Keep the image root partition fixed rather than card-sized: first boot grows
+# the existing root partition and its filesystem on the actual target device,
+# so only the factory content has to fit here.  160 MiB covers an image root of
+# roughly 97 MiB (Node.js and npm add about 57 MiB on their own).
+#
+# Size this against the uncompressed size -- `du --apparent-size`, or the
+# "uncompressed filesystem size" that mksquashfs reports -- not `du -sh`.  The
+# allocated-block figure runs well below the apparent size here, and a 104 MiB
+# ext4 layout failed to allocate its last 9 blocks even though `du -sh` made
+# the root look like it had room to spare.
 sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
-printf '%s\n' 'CONFIG_TARGET_ROOTFS_PARTSIZE=104' >> .config
+printf '%s\n' 'CONFIG_TARGET_ROOTFS_PARTSIZE=160' >> .config
 
 echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
-grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=104' .config || {
-	echo 'Unexpected rootfs partition size: keep the factory image small (104 MiB)' >&2
+grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=160' .config || {
+	echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (160 MiB with Node.js)' >&2
 	exit 1
 }
 grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled' >&2; exit 1; }
@@ -315,7 +323,7 @@ run_logged "$LOG_DIR/target-install.log" make -j1 V=s target/install
 
 # The first-boot storage grower is part of the base-files overlay. Verify that
 # package/install copied it into the actual image root and enabled it at S99;
-# otherwise a factory image would keep only the fixed 104 MiB root partition.
+# otherwise a factory image would keep only the fixed 160 MiB root partition.
 STORAGE_INIT=$(find "$OW_DIR/build_dir" -type f -path '*/root-sunxi/etc/init.d/opi3lts-expand-storage' -print -quit)
 test -n "$STORAGE_INIT" || { echo 'SD-card expansion init script is missing from the image root' >&2; exit 1; }
 STORAGE_ROOT=${STORAGE_INIT%/etc/init.d/opi3lts-expand-storage}
