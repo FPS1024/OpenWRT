@@ -91,9 +91,10 @@ jobs:
           CONFIG_TARGET_sunxi=y
           CONFIG_TARGET_sunxi_cortexa53=y
           CONFIG_TARGET_sunxi_cortexa53_DEVICE_xunlong_orangepi-3-lts=y
-          # Holds the ~97 MiB image root; see the note in scripts/build.sh for
-          # why this has to be sized against the uncompressed size.
-          CONFIG_TARGET_ROOTFS_PARTSIZE=160
+          # Holds the ~390 MiB ext4 layout of the image root; see the note in
+          # scripts/build.sh for why this has to be sized against the
+          # uncompressed size.
+          CONFIG_TARGET_ROOTFS_PARTSIZE=512
           CONFIG_DEVEL=y
           CONFIG_PER_FEED_REPO=y
           CONFIG_FEED_packages=y
@@ -164,7 +165,7 @@ jobs:
           printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
-          grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=160' .config || { echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (160 MiB with Node.js)'; exit 1; }
+          grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config || { echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Node.js and Docker)'; exit 1; }
           grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled'; exit 1; }
