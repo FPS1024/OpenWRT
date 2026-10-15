@@ -82,8 +82,8 @@ jobs:
           mkdir -p "$LOG_DIR"
           sh scripts/apply-overlay.sh "$OPENWRT_DIR"
           cd "$OPENWRT_DIR"
-          rm -rf package/luci-app-openclash-prebuilt
-          rm -f dl/luci-app-openclash-latest.ipk
+          sh "$GITHUB_WORKSPACE/scripts/prepare-openclash.sh" "$OPENWRT_DIR" > "$LOG_DIR/openclash-sources.txt" 2>&1 || { cat "$LOG_DIR/openclash-sources.txt"; exit 1; }
+          cat "$LOG_DIR/openclash-sources.txt"
           if [ -d bin/packages ]; then
             find bin/packages -type f -name 'luci-app-openclash*.ipk' -delete
           fi
@@ -103,6 +103,7 @@ jobs:
           CONFIG_PACKAGE_uhttpd=y
           CONFIG_PACKAGE_uhttpd-mod-ubus=y
           CONFIG_PACKAGE_luci-compat=y
+          CONFIG_PACKAGE_luci-app-openclash=y
           CONFIG_PACKAGE_kmod-tun=y
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
@@ -162,7 +163,8 @@ jobs:
           # CONFIG_PACKAGE_libopcodes is not set
           EOF
           fi
-          printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+          sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+          printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
           grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config || { echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Node.js and Docker)'; exit 1; }
@@ -170,8 +172,8 @@ jobs:
           grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled'; exit 1; }
           grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig'; exit 1; }
-          if grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
-            echo 'OpenClash app must not be selected for the factory image'
+          if ! grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
+            echo 'OpenClash app was not selected for the factory image'
             exit 1
           fi
           grep -qx 'CONFIG_PACKAGE_node=y' .config || { echo 'Node.js was not selected by defconfig'; exit 1; }
@@ -182,6 +184,7 @@ jobs:
           grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
           for package in \
             luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
+            luci-app-openclash \
             luci-theme-argon luci-app-argon-config \
             luci-i18n-base-zh-cn luci-i18n-firewall-zh-cn \
             luci-i18n-package-manager-zh-cn; do
@@ -282,11 +285,11 @@ jobs:
               grep -q "^${package} " "$manifest" || { echo "Requested development package is missing: $package"; exit 1; }
             done
           fi
-          if grep -q '^luci-app-openclash ' "$manifest"; then
-            echo 'Unexpected OpenClash app package found in image manifest'
+          if ! grep -q '^luci-app-openclash ' "$manifest"; then
+            echo 'OpenClash app package is missing from the image manifest'
             exit 1
           fi
-          echo 'OpenClash app is not bundled; its runtime dependencies are included'
+          echo 'OpenClash v0.48.002 app and runtime dependencies are bundled'
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
           grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated'; cat "$LOG_DIR/images.txt"; exit 1; }
           squashfs_image="$image_dir/openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img.gz"
@@ -322,10 +325,11 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/*/luci-app-openclash_*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node_*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node-npm_*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/libcares_*.ipk
-          # The image includes OpenClash runtime dependencies, not the app.
+          # The image includes the pinned OpenClash v0.48.002 app and its runtime dependencies.
           if-no-files-found: warn
 
       - name: Upload build diagnostics

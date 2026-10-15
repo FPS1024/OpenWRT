@@ -33,6 +33,133 @@ run_logged() {
 	return "$_run_logged_status"
 }
 
+# `toolchain/install` is incremental, but invoking it on every run still makes
+# the build output look as if the toolchain is being rebuilt.  Check the
+# outputs that the following package and image stages actually consume first.
+# A partial tree falls through to the normal OpenWrt dependency graph, which
+# rebuilds only the missing pieces.
+toolchain_ready() {
+	_tc_missing=
+	_tc_host_bin="$OW_DIR/staging_dir/host/bin"
+	for _tc_tool in \
+		bash gcc g++ fakeroot fwtool make_ext4fs mkhash mkimage mcopy mkfs.fat \
+		mksquashfs4 ninja patchelf pkg-config ptgen sstrip usign; do
+		if [ ! -x "$_tc_host_bin/$_tc_tool" ]; then
+			_tc_missing="$_tc_missing host/$_tc_tool"
+		fi
+	done
+
+	_tc_toolchain_dir=
+	_tc_prefix=
+	_tc_arch_packages=$(sed -n 's/^CONFIG_TARGET_ARCH_PACKAGES="\([^"]*\)"$/\1/p' .config)
+	_tc_gcc_version=$(sed -n 's/^CONFIG_GCC_VERSION="\([^"]*\)"$/\1/p' .config)
+	_tc_libc=$(sed -n 's/^CONFIG_LIBC="\([^"]*\)"$/\1/p' .config)
+	if [ -n "$_tc_arch_packages" ] && [ -n "$_tc_gcc_version" ] && [ -n "$_tc_libc" ]; then
+		_tc_candidate_glob="$OW_DIR/staging_dir/toolchain-${_tc_arch_packages}_gcc-${_tc_gcc_version}_${_tc_libc}"
+	else
+		_tc_candidate_glob="$OW_DIR/staging_dir/toolchain-*"
+	fi
+	for _tc_candidate in $_tc_candidate_glob; do
+		[ -d "$_tc_candidate/bin" ] || continue
+		_tc_candidate_prefix=$(sed -n 's/^TARGET_CROSS=//p' "$_tc_candidate/info.mk" 2>/dev/null || true)
+		if [ -z "$_tc_candidate_prefix" ]; then
+			for _tc_gcc in "$_tc_candidate"/bin/*-gcc; do
+				[ -x "$_tc_gcc" ] || continue
+				_tc_candidate_prefix=${_tc_gcc##*/}
+				_tc_candidate_prefix=${_tc_candidate_prefix%gcc}
+				break
+			done
+		fi
+		[ -n "$_tc_candidate_prefix" ] || continue
+		_tc_toolchain_dir=$_tc_candidate
+		_tc_prefix=$_tc_candidate_prefix
+		[ -n "$_tc_toolchain_dir" ] && break
+	done
+	if [ -z "$_tc_toolchain_dir" ]; then
+		_tc_missing="$_tc_missing cross-compiler"
+	else
+		if [ ! -f "$_tc_toolchain_dir/info.mk" ] || \
+			[ ! -f "$_tc_toolchain_dir/stamp/.toolchain_compile" ]; then
+			_tc_missing="$_tc_missing toolchain-stamp"
+		fi
+		for _tc_tool in gcc g++ cpp ar ranlib ld.bfd strip objcopy nm readelf; do
+			if [ ! -x "$_tc_toolchain_dir/bin/${_tc_prefix}${_tc_tool}" ]; then
+				_tc_missing="$_tc_missing cross/${_tc_prefix}${_tc_tool}"
+			fi
+		done
+	fi
+
+	if [ -n "$_tc_missing" ]; then
+		echo "Toolchain readiness check: missing$_tc_missing" >&2
+		return 1
+	fi
+	return 0
+}
+
+# OpenWrt's stamps normally make the build incremental.  If an output was
+# deleted by hand, however, its install stamp can still make `make` believe
+# that the host package is complete.  Remove only the stamp that owns the
+# missing output so the repair remains incremental instead of forcing a clean
+# rebuild of every host tool and every compiler component.
+toolchain_repair_stamps() {
+	_tc_host_stamp="$OW_DIR/staging_dir/host/stamp"
+	_tc_host_missing=
+	for _tc_tool in \
+		bash gcc g++ fakeroot fwtool make_ext4fs mkhash mkimage mcopy mkfs.fat \
+		mksquashfs4 ninja patchelf pkg-config ptgen sstrip usign; do
+		[ -x "$OW_DIR/staging_dir/host/bin/$_tc_tool" ] && continue
+		_tc_host_missing=1
+		case "$_tc_tool" in
+			fakeroot) rm -f "$_tc_host_stamp/.fakeroot_installed" ;;
+			fwtool) rm -f "$_tc_host_stamp/.fwtool_installed" ;;
+			make_ext4fs) rm -f "$_tc_host_stamp/.make-ext4fs_installed" ;;
+			mkhash|ptgen) rm -f "$_tc_host_stamp/.firmware-utils_installed" ;;
+			mkimage) rm -f "$_tc_host_stamp/.mkimage_installed" ;;
+			mcopy) rm -f "$_tc_host_stamp/.mtools_installed" ;;
+			mkfs.fat) rm -f "$_tc_host_stamp/.dosfstools_installed" ;;
+			mksquashfs4) rm -f "$_tc_host_stamp/.squashfs4_installed" ;;
+			ninja) rm -f "$_tc_host_stamp/.ninja_installed" ;;
+			patchelf) rm -f "$_tc_host_stamp/.patchelf_installed" ;;
+			pkg-config) rm -f "$_tc_host_stamp/.pkgconf_installed" ;;
+			sstrip) rm -f "$_tc_host_stamp/.sstrip_installed" ;;
+			usign) rm -f "$_tc_host_stamp/.usign_installed" ;;
+			# These are host-toolchain symlinks; the prereq stage recreates them.
+			bash|gcc|g++) : ;;
+		esac
+	done
+	[ -n "$_tc_host_missing" ] && rm -f "$_tc_host_stamp"/.tools_compile_*
+
+	if [ -n "$_tc_toolchain_dir" ]; then
+		_tc_cross_missing=
+		for _tc_tool in gcc g++ cpp ar ranlib ld.bfd strip objcopy nm readelf; do
+			if [ ! -x "$_tc_toolchain_dir/bin/${_tc_prefix}${_tc_tool}" ]; then
+				_tc_cross_missing=1
+				case "$_tc_tool" in
+					gcc|g++|cpp) rm -f "$_tc_toolchain_dir/stamp/.gcc_final_installed" ;;
+					*) rm -f "$_tc_toolchain_dir/stamp/.binutils_installed" ;;
+				esac
+			fi
+		done
+		[ -n "$_tc_cross_missing" ] && rm -f "$_tc_toolchain_dir/stamp/.toolchain_compile"
+	fi
+}
+
+ensure_toolchain() {
+	if toolchain_ready; then
+		echo '>> Host tools and cross toolchain are complete; skip toolchain/install'
+		printf '%s\n' 'readiness check: complete; toolchain/install skipped' > "$LOG_DIR/toolchain-install.log"
+		return 0
+	fi
+
+	echo '>> Host tools or cross toolchain are incomplete; run incremental toolchain/install'
+	toolchain_repair_stamps
+	run_logged "$LOG_DIR/toolchain-install.log" make -j"$JOBS" toolchain/install
+	if ! toolchain_ready; then
+		echo 'Toolchain install completed, but required host or cross-tool outputs are still missing' >&2
+		return 1
+	fi
+}
+
 # Some local sandboxes reject the Unix socket used by the fakeroot binary
 # built by OpenWrt.  A system fakeroot can still create the package archives;
 # use it only when the OpenWrt host helper fails its harmless probe.
@@ -104,11 +231,12 @@ if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt
 	exit 1
 fi
 cat "$LOG_DIR/argon-sources.txt"
-# The image carries OpenClash runtime dependencies, but not the LuCI app.
-# Remove generated leftovers from an older incremental build so it cannot be
-# selected or copied into the image accidentally.
-rm -rf "$OW_DIR/package/luci-app-openclash-prebuilt"
-rm -f "$OW_DIR/dl/luci-app-openclash-latest.ipk"
+
+if ! sh "$HERE/scripts/prepare-openclash.sh" "$OW_DIR" > "$LOG_DIR/openclash-sources.txt" 2>&1; then
+	cat "$LOG_DIR/openclash-sources.txt"
+	exit 1
+fi
+cat "$LOG_DIR/openclash-sources.txt"
 if [ -d "$OW_DIR/bin/packages" ]; then
 	find "$OW_DIR/bin/packages" -type f -name 'luci-app-openclash*.ipk' -delete
 fi
@@ -130,6 +258,7 @@ CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
 CONFIG_PACKAGE_luci-compat=y
+CONFIG_PACKAGE_luci-app-openclash=y
 CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
@@ -191,10 +320,10 @@ EOF
 fi
 fi
 
-# Drop a stale OpenClash selection from an existing local .config. Its runtime
-# dependencies remain selected in the package list above.
+# Keep the pinned OpenClash application selected in an existing incremental
+# .config as well as in a newly created configuration.
 sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
 
 # Keep the web UI selected in an existing incremental build tree too.
 for symbol in \
@@ -206,6 +335,7 @@ for symbol in \
 	PACKAGE_uhttpd \
 	PACKAGE_uhttpd-mod-ubus \
 	PACKAGE_luci-compat \
+	PACKAGE_luci-app-openclash \
 	PACKAGE_kmod-tun \
 	PACKAGE_kmod-inet-diag \
 	PACKAGE_kmod-nft-tproxy \
@@ -287,8 +417,8 @@ grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is no
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
-if grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
-	echo 'OpenClash app must not be selected for the factory image' >&2
+if ! grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
+	echo 'OpenClash app was not selected for the factory image' >&2
 	exit 1
 fi
 grep -qx 'CONFIG_PACKAGE_node=y' .config || {
@@ -312,7 +442,11 @@ run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
 # package (usign, fwtool, libjson-c, lua) fails on a missing staging_dir/host/bin/ninja.
 # The CI workflow builds this same target in its own step.
 echo ">> Build host tools and cross toolchain"
-run_logged "$LOG_DIR/toolchain-install.log" make -j"$JOBS" toolchain/install
+ensure_toolchain
+
+echo ">> Build target kernel and modules"
+run_logged "$LOG_DIR/target-linux-compile.log" \
+	make -j"$JOBS" target/linux/compile
 
 prepare_fakeroot
 
@@ -357,6 +491,7 @@ MANIFEST="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}.manifest"
 test -s "$MANIFEST" || { echo "Image manifest is missing: $MANIFEST" >&2; exit 1; }
 for package in \
 	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
+	luci-app-openclash \
 	dnsmasq-full libnettle8 libnetfilter-conntrack3 \
 	bash curl ca-bundle ip-full ruby ruby-yaml unzip \
 	sfdisk partx-utils losetup resize2fs \
@@ -370,11 +505,11 @@ if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 		grep -q "^${package} " "$MANIFEST" || { echo "Requested development package is missing: $package" >&2; exit 1; }
 	done
 fi
-if grep -q '^luci-app-openclash ' "$MANIFEST"; then
-	echo 'Unexpected OpenClash app package found in image manifest' >&2
+if ! grep -q '^luci-app-openclash ' "$MANIFEST"; then
+	echo 'OpenClash app package is missing from the image manifest' >&2
 	exit 1
 fi
-echo 'OpenClash app is not bundled; its runtime dependencies are included'
+echo 'OpenClash v0.48.002 app and runtime dependencies are bundled'
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }

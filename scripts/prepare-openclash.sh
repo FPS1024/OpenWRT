@@ -1,10 +1,9 @@
 #!/bin/sh
-# Prepare the latest optional OpenClash LuCI package for an OpenWrt build.
+# Prepare the pinned OpenClash LuCI package for an OpenWrt build.
 #
-# The package is deliberately optional: a GitHub release/API outage must not
-# prevent the router image itself from being built.  All OpenClash runtime
-# dependencies are selected separately in the main configuration and therefore
-# remain mandatory.
+# The factory image intentionally uses one explicit upstream release. A
+# missing or corrupt package is a hard error: silently building an image
+# without the requested LuCI application is worse than stopping early.
 
 set -eu
 
@@ -14,121 +13,157 @@ if [ "$#" -ne 1 ]; then
 fi
 
 OW_DIR=$1
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+OPENCLASH_VERSION=0.48.002
+OPENCLASH_ASSET="luci-app-openclash_${OPENCLASH_VERSION}_all.ipk"
+OPENCLASH_URL="https://github.com/vernesong/OpenClash/releases/download/v${OPENCLASH_VERSION}/${OPENCLASH_ASSET}"
+OPENCLASH_SHA256=f3f0d0514553aea8d542c62dc52ac26d1f79dbda24204280f1cb8ea7fff71e9e
 PKG_DIR="$OW_DIR/package/luci-app-openclash-prebuilt"
 DL_DIR="$OW_DIR/dl"
-IPK="$DL_DIR/luci-app-openclash-latest.ipk"
-API_JSON="${TMPDIR:-/tmp}/openclash-release.$$.json"
+IPK="$DL_DIR/$OPENCLASH_ASSET"
+TMP_IPK="${IPK}.tmp.$$"
 
-printf '%s\n' '>> Preparing optional OpenClash package'
+detect_ipk_format() {
+	if command -v ar >/dev/null 2>&1 && ar t "$IPK" >/dev/null 2>&1; then
+		printf '%s\n' ar
+		return 0
+	fi
+	if tar -tzf "$IPK" >/dev/null 2>&1; then
+		printf '%s\n' tar
+		return 0
+	fi
+	return 1
+}
+
+verify_ipk_sha256() {
+	_actual_sha256=$(sha256sum "$1" 2>/dev/null | awk '{print $1}') || return 1
+	[ "$_actual_sha256" = "$OPENCLASH_SHA256" ]
+}
+
+cleanup() {
+	rm -f "$TMP_IPK"
+}
+trap cleanup EXIT HUP INT TERM
+
+printf '>> Preparing OpenClash v%s\n' "$OPENCLASH_VERSION"
 mkdir -p "$DL_DIR"
-# Do not accidentally reuse an older generated package in an incremental tree
-# when the latest-release request fails.
-rm -rf "$PKG_DIR"
-rm -f "$IPK"
 
-# A checked-in package in apps/ is useful for offline/local builds.  In CI the
-# latest release is preferred so the image does not silently ship an old app.
-LOCAL_IPK=''
-for candidate in "$HERE"/apps/luci-app-openclash*.ipk; do
-	[ -f "$candidate" ] || continue
-	LOCAL_IPK=$candidate
-	break
-done
+# Remove the old optional/latest name from trees created by earlier revisions.
+rm -f "$DL_DIR/luci-app-openclash-latest.ipk"
 
-ASSET_NAME=''
-ASSET_URL=''
-if command -v curl >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-	if curl -fsSL --retry 3 --connect-timeout 15 --max-time 60 \
-		-H 'Accept: application/vnd.github+json' \
+IPK_FORMAT=
+if [ -s "$IPK" ]; then
+	IPK_FORMAT=$(detect_ipk_format || true)
+	if [ -n "$IPK_FORMAT" ] && ! verify_ipk_sha256 "$IPK"; then
+		printf '%s\n' 'Cached OpenClash package has the wrong SHA-256; downloading it again.'
+		IPK_FORMAT=
+	fi
+fi
+if [ -z "$IPK_FORMAT" ]; then
+	command -v curl >/dev/null 2>&1 || {
+		printf '%s\n' 'OpenClash requires curl on the build host' >&2
+		exit 1
+	}
+	command -v sha256sum >/dev/null 2>&1 || {
+		printf '%s\n' 'OpenClash requires sha256sum on the build host' >&2
+		exit 1
+	}
+	command -v tar >/dev/null 2>&1 || {
+		printf '%s\n' 'OpenClash requires tar on the build host' >&2
+		exit 1
+	}
+	printf 'Downloading %s\n' "$OPENCLASH_URL"
+	curl -fL --retry 3 --connect-timeout 15 --max-time 180 \
 		-H 'User-Agent: FPS1024-OpenWRT-builder' \
-		https://api.github.com/repos/vernesong/OpenClash/releases/latest > "$API_JSON" 2>/dev/null; then
-		ASSET_LINES=$(python3 - "$API_JSON" <<'PY'
-import json
-import re
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as fh:
-    release = json.load(fh)
-
-assets = []
-for asset in release.get("assets", []):
-    name = asset.get("name", "")
-    url = asset.get("browser_download_url", "")
-    if name.startswith("luci-app-openclash") and name.endswith(".ipk") and url:
-        assets.append((name, url))
-
-# Some releases publish an explicitly nftables-labelled asset.  Prefer it;
-# otherwise the normal all-architecture OpenClash IPK is the nftables-capable
-# LuCI application and uses the nftables dependencies selected by the build.
-nft = [x for x in assets if re.search(r"nft|nfat", x[0], re.I)]
-chosen = (nft or assets)
-if chosen:
-    print(chosen[0][0])
-    print(chosen[0][1])
-PY
-)
-		ASSET_NAME=$(printf '%s\n' "$ASSET_LINES" | sed -n '1p')
-		ASSET_URL=$(printf '%s\n' "$ASSET_LINES" | sed -n '2p')
-	fi
+		-o "$TMP_IPK" "$OPENCLASH_URL"
+	verify_ipk_sha256 "$TMP_IPK" || {
+		printf 'OpenClash SHA-256 mismatch; expected %s\n' "$OPENCLASH_SHA256" >&2
+		exit 1
+	}
+	mv -f "$TMP_IPK" "$IPK"
+	IPK_FORMAT=$(detect_ipk_format || true)
 fi
 
-if [ -n "$ASSET_URL" ]; then
-	printf 'Latest release asset: %s\n' "$ASSET_NAME"
-	if ! curl -fL --retry 3 --connect-timeout 15 --max-time 180 \
-		-H 'User-Agent: FPS1024-OpenWRT-builder' "$ASSET_URL" -o "$IPK"; then
-		printf '%s\n' 'WARNING: OpenClash download failed; skipping optional app.'
-		[ -n "$LOCAL_IPK" ] || exit 0
-		printf 'Using local fallback: %s\n' "$LOCAL_IPK"
-		cp -f "$LOCAL_IPK" "$IPK"
-	fi
-elif [ -n "$LOCAL_IPK" ]; then
-	printf 'Release API unavailable; using local package: %s\n' "$LOCAL_IPK"
-	cp -f "$LOCAL_IPK" "$IPK"
-else
-	printf '%s\n' 'WARNING: no OpenClash release or local package found; skipping optional app.'
-	exit 0
-fi
+command -v sha256sum >/dev/null 2>&1 || {
+	printf '%s\n' 'OpenClash requires sha256sum on the build host' >&2
+	exit 1
+}
+verify_ipk_sha256 "$IPK" || {
+	printf 'OpenClash SHA-256 mismatch; expected %s\n' "$OPENCLASH_SHA256" >&2
+	exit 1
+}
 
-# Verify the archive before creating a package definition.  A partial download
-# must never enter the firmware rootfs.
-if ! tar -tzf "$IPK" >/dev/null 2>&1; then
-	printf '%s\n' 'WARNING: downloaded OpenClash file is not a valid IPK; skipping app.'
-	exit 0
-fi
+[ -n "$IPK_FORMAT" ] || {
+	printf 'Downloaded OpenClash archive is invalid: %s\n' "$IPK" >&2
+	exit 1
+}
+case "$IPK_FORMAT" in
+ar)
+	ar t "$IPK" | grep -qx 'data.tar.gz'
+	;;
+tar)
+	tar -tzf "$IPK" 2>/dev/null | grep -Eq '(^|/)data\.tar\.gz$'
+	;;
+esac || {
+	printf 'OpenClash IPK has no data.tar.gz payload: %s\n' "$IPK" >&2
+	exit 1
+}
 
-VERSION=$(tar -xOzf "$IPK" ./control.tar.gz 2>/dev/null \
-	| tar -xzO ./control 2>/dev/null \
-	| sed -n 's/^Version:[[:space:]]*//p' | sed -n '1p' || true)
-VERSION=${VERSION:-latest}
-# Keep the generated Makefile safe even if an upstream version string changes.
-VERSION=$(printf '%s' "$VERSION" | tr -cd 'A-Za-z0-9._+-')
-[ -n "$VERSION" ] || VERSION=latest
+read_control_archive() {
+	case "$IPK_FORMAT" in
+		ar)
+			ar p "$IPK" control.tar.gz
+			;;
+		tar)
+			tar -xOzf "$IPK" ./control.tar.gz 2>/dev/null || \
+				tar -xOzf "$IPK" control.tar.gz 2>/dev/null
+			;;
+	esac
+}
 
+CONTROL=$(read_control_archive 2>/dev/null | tar -xzO ./control 2>/dev/null || \
+	read_control_archive 2>/dev/null | tar -xzO control 2>/dev/null) || {
+	printf 'OpenClash IPK has no readable control metadata: %s\n' "$IPK" >&2
+	exit 1
+}
+PACKAGE_NAME=$(printf '%s\n' "$CONTROL" | sed -n 's/^Package:[[:space:]]*//p' | sed -n '1p')
+PACKAGE_VERSION=$(printf '%s\n' "$CONTROL" | sed -n 's/^Version:[[:space:]]*//p' | sed -n '1p')
+PACKAGE_ARCH=$(printf '%s\n' "$CONTROL" | sed -n 's/^Architecture:[[:space:]]*//p' | sed -n '1p')
+[ "$PACKAGE_NAME" = luci-app-openclash ] || {
+	printf 'Unexpected OpenClash package name: %s\n' "${PACKAGE_NAME:-<empty>}" >&2
+	exit 1
+}
+[ "$PACKAGE_VERSION" = "$OPENCLASH_VERSION" ] || {
+	printf 'OpenClash package version is %s, expected %s\n' "${PACKAGE_VERSION:-<empty>}" "$OPENCLASH_VERSION" >&2
+	exit 1
+}
+[ "$PACKAGE_ARCH" = all ] || {
+	printf 'OpenClash package architecture is %s, expected all\n' "${PACKAGE_ARCH:-<empty>}" >&2
+	exit 1
+}
+
+rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR"
-cat > "$PKG_DIR/Makefile" <<'EOF'
-include $(TOPDIR)/rules.mk
+cat > "$PKG_DIR/Makefile" <<EOF
+include \$(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-app-openclash
-PKG_VERSION:=__OPENCLASH_VERSION__
+PKG_VERSION:=$OPENCLASH_VERSION
 PKG_RELEASE:=1
-PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-prebuilt-$(PKG_VERSION)
+PKG_BUILD_DIR:=\$(BUILD_DIR)/\$(PKG_NAME)-prebuilt-\$(PKG_VERSION)
 PKGARCH:=all
 
-include $(INCLUDE_DIR)/package.mk
+include \$(INCLUDE_DIR)/package.mk
 
 define Package/luci-app-openclash
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
-  TITLE:=OpenClash LuCI application (prebuilt release)
-  DEPENDS:=+dnsmasq-full +bash +curl +ca-bundle +ip-full +ruby +ruby-yaml +kmod-tun +kmod-inet-diag +unzip +kmod-nft-tproxy +kmod-nf-conntrack-netlink +luci-compat +luci-base
+  TITLE:=OpenClash LuCI application (v$OPENCLASH_VERSION)
+  DEPENDS:=+dnsmasq-full +bash +curl +ca-bundle +ip-full +ruby +ruby-yaml +kmod-tun +kmod-inet-diag +unzip +kmod-nft-tproxy +kmod-nf-conntrack-netlink +luci +luci-compat +luci-base
 endef
 
 define Package/luci-app-openclash/description
-  OpenClash LuCI application unpacked from the latest upstream release.
-  The package is optional; its runtime dependencies are selected by the
-  project configuration and are not optional.
+  OpenClash LuCI application unpacked from the pinned upstream v$OPENCLASH_VERSION release.
 endef
 
 define Package/luci-app-openclash/conffiles
@@ -136,19 +171,24 @@ define Package/luci-app-openclash/conffiles
 endef
 
 define Build/Prepare
-	$(RM) -r $(PKG_BUILD_DIR)
-	$(INSTALL_DIR) $(PKG_BUILD_DIR)/root
-	tar -xOzf $(DL_DIR)/luci-app-openclash-latest.ipk ./data.tar.gz | tar -xzf - -C $(PKG_BUILD_DIR)/root
+	\$(RM) -r \$(PKG_BUILD_DIR)
+	\$(INSTALL_DIR) \$(PKG_BUILD_DIR)/root
+	{ if ar t "\$(DL_DIR)/$OPENCLASH_ASSET" >/dev/null 2>&1; then \
+		ar p "\$(DL_DIR)/$OPENCLASH_ASSET" data.tar.gz; \
+	else \
+		tar -xOzf "\$(DL_DIR)/$OPENCLASH_ASSET" ./data.tar.gz 2>/dev/null || \
+		tar -xOzf "\$(DL_DIR)/$OPENCLASH_ASSET" data.tar.gz; \
+	fi; } | tar -xzf - -C \$(PKG_BUILD_DIR)/root
 endef
 
 define Build/Compile
 endef
 
 define Package/luci-app-openclash/install
-	$(CP) $(PKG_BUILD_DIR)/root/. $(1)/
+	\$(CP) \$(PKG_BUILD_DIR)/root/. \$(1)/
 endef
 
-$(eval $(call BuildPackage,luci-app-openclash))
+\$(eval \$(call BuildPackage,luci-app-openclash))
 EOF
-sed -i "s/__OPENCLASH_VERSION__/$VERSION/" "$PKG_DIR/Makefile"
-printf 'OpenClash package prepared: version %s\n' "$VERSION"
+
+printf 'OpenClash package prepared: %s\n' "$IPK"
