@@ -78,4 +78,27 @@ if [ -f /etc/config/luci ]; then
 	uci -q commit luci
 fi
 
+# ---------------- docker ----------------
+# Docker's legacy bridge strips loopback nameservers from the host's
+# /etc/resolv.conf and falls back to 8.8.8.8/8.8.4.4 when none remain.  Point
+# containers at the LAN resolver instead.
+#
+# The docker package defaults its data root to /opt/docker.  On a squashfs
+# image that path is on the overlayfs root, which cannot be used as an
+# overlay2 upperdir and forces the slow vfs driver.  /overlay is the real f2fs
+# mount created by the storage grower; ext4 images have no separate /overlay
+# mount and can keep the package default.
+uci -q get dockerd.globals >/dev/null || uci -q set dockerd.globals=globals
+if grep -q ' /overlay ' /proc/self/mountinfo; then
+	mkdir -p /overlay/docker
+	uci -q set dockerd.globals.data_root='/overlay/docker'
+else
+	uci -q set dockerd.globals.data_root='/opt/docker/'
+fi
+LAN_IP=$(uci -q get network.lan.ipaddr)
+[ -n "$LAN_IP" ] || LAN_IP='192.168.8.1'
+uci -q delete dockerd.globals.dns 2>/dev/null || true
+uci -q add_list dockerd.globals.dns="$LAN_IP"
+uci -q commit dockerd
+
 exit 0

@@ -17,6 +17,24 @@ Wi-Fi 已在 Orange Pi 3 LTS 实机上验证：手机可连接 AP、获取地址
 
 Wi-Fi 密码是公开的初始值，部署后请立即修改。设备不预设 root 管理密码；首次启动通过串口运行 `passwd`，再登录 LuCI。当前构建脚本已选择 LuCI/uhttpd；已有的旧镜像不会因此自动获得网页管理，需刷入新的成功构建镜像。
 
+## Docker
+
+镜像内置 Docker（`dockerd`、`containerd`、`runc`、`docker compose` 和 LuCI Dockerman）。首次启动的 `99-opi3lts` 会按镜像布局写入 Docker 默认值：
+
+| 项目 | 默认值 |
+| --- | --- |
+| 数据目录 | squashfs 镜像使用 `/overlay/docker`（真实 f2fs 挂载，给 overlay2 一个可用的 upperdir）；ext4 镜像沿用 `/opt/docker/`。文件系统不支持 overlay2 时 Docker 会回退 vfs |
+| 容器 DNS | LAN 地址（默认 `192.168.8.1`），走路由器 dnsmasq；默认 bridge 否则会回退到不可达的 `8.8.8.8` |
+| fw4 forwarding | `docker -> wan`，由 dockerd 初始化时写入，普通 bridge 容器可以出站 |
+
+如果修改了 LAN 地址，需要同步修改 `/etc/config/dockerd` 里的 `dns`，然后重启 dockerd。
+
+固件不预置任何第三方 Registry mirror。Docker Hub 直连不可用时，请自行在 `/etc/config/dockerd` 中配置 `registry_mirrors`。
+
+Docker Compose 默认创建的用户自定义网络（`br-xxxx`）不在 `docker` zone 内；需要出站时请把对应接口加入 firewall，或让该容器使用 host 网络。启用 OpenClash 的 fake-ip DNS 时，容器若仍使用 dnsmasq 会拿到 fake-ip；要么让容器流量也经过 OpenClash 重定向，要么给容器使用不被劫持的 DNS。
+
+需要单个服务绕过 Docker bridge 时，可以自行使用 `--network host`；固件不预置或自动启动任何业务容器。
+
 ## 构建
 
 推荐使用 Ubuntu x86-64，至少 4 核、8 GB 内存和 25 GB 可用磁盘。首次构建耗时较长；保留构建目录，之后 OpenWrt 会复用未变化的工具链、内核和软件包。
@@ -33,7 +51,7 @@ OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 
 Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，因此不会为开发工具付出额外的长时间编译。手动运行 workflow 时把 `include_dev_tools` 设为 true，或本地使用 `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh`，才会把这批工具放进固件。构建日志按 `package-compile`、`package-install`、`target-install` 和 `package-index` 分阶段保存；其中 `target-install` 是实际制作镜像的短阶段。
 
-固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`，以及 **Node.js 24.21.0**（`node` 与 `node-npm`，small-icu 的 i18n 数据已直接打进二进制）。固定的 `openwrt-24.10` 软件源只提供 Node 20，因此包定义放在仓库的 `overlay/feeds/packages/lang/node`；Node 24 要求宿主机同时有 `gcc-12` 和 `g++-12`，本地构建由 `scripts/build.sh` 预检，CI 由 workflow 自行安装。从零编译 Node 约需五小时，而 CI 每次只缓存 `dl/`，所以带 Node 的 Actions 构建会接近六小时的作业上限。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
+固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。Ruby 的 YJIT 在构建时关闭，避免为 JIT 额外编译整套 rustc/LLVM。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。默认镜像不包含 Node.js；需要时请自行从软件源安装（官方 openwrt-24.10 源提供 Node 20，仓库 `overlay/feeds/packages/lang/node` 中的 Node 24 包定义保留但不再默认选中）。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
 
 固件内置 OpenClash LuCI 插件，版本固定为 [v0.48.002](https://github.com/vernesong/OpenClash/releases/tag/v0.48.002)，构建时下载并安装 `luci-app-openclash_0.48.002_all.ipk`。脚本固定校验 SHA-256 `f3f0d0514553aea8d542c62dc52ac26d1f79dbda24204280f1cb8ea7fff71e9e`，并检查 IPK 的包名、版本、架构以及 OpenClash 运行依赖已经进入镜像。
 

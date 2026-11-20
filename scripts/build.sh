@@ -41,9 +41,12 @@ run_logged() {
 toolchain_ready() {
 	_tc_missing=
 	_tc_host_bin="$OW_DIR/staging_dir/host/bin"
+	# fwtool and usign are host packages built during package/compile, not by
+	# toolchain/install.  Requiring them here makes an interrupted incremental
+	# tree fail before the package stage that would build them.
 	for _tc_tool in \
-		bash gcc g++ fakeroot fwtool make_ext4fs mkhash mkimage mcopy mkfs.fat \
-		mksquashfs4 ninja patchelf pkg-config ptgen sstrip usign; do
+		bash gcc g++ fakeroot make_ext4fs mkhash mkimage mcopy mkfs.fat \
+		mksquashfs4 ninja patchelf pkg-config ptgen sstrip; do
 		if [ ! -x "$_tc_host_bin/$_tc_tool" ]; then
 			_tc_missing="$_tc_missing host/$_tc_tool"
 		fi
@@ -78,9 +81,8 @@ toolchain_ready() {
 	if [ -z "$_tc_toolchain_dir" ]; then
 		_tc_missing="$_tc_missing cross-compiler"
 	else
-		if [ ! -f "$_tc_toolchain_dir/info.mk" ] || \
-			[ ! -f "$_tc_toolchain_dir/stamp/.toolchain_compile" ]; then
-			_tc_missing="$_tc_missing toolchain-stamp"
+		if [ ! -f "$_tc_toolchain_dir/info.mk" ]; then
+			_tc_missing="$_tc_missing toolchain-info"
 		fi
 		for _tc_tool in gcc g++ cpp ar ranlib ld.bfd strip objcopy nm readelf; do
 			if [ ! -x "$_tc_toolchain_dir/bin/${_tc_prefix}${_tc_tool}" ]; then
@@ -184,17 +186,6 @@ EOF
 	return 1
 }
 
-# Node.js 24 requires a GCC 12.2 or newer host toolchain.  The node package
-# prefers gcc-12 and g++-12 but only switches when BOTH are present: setting
-# one without the other leaves CXX_host empty, and gyp then emits compile lines
-# that start with the compiler's arguments instead of a compiler, surfacing
-# much later as "make[4]: o: No such file or directory".  Fail here instead of
-# after the clone and toolchain stages.
-if ! command -v gcc-12 >/dev/null 2>&1 || ! command -v g++-12 >/dev/null 2>&1; then
-	echo 'Node.js 24 needs gcc-12 and g++-12 on the build host (apt install gcc-12 g++-12)' >&2
-	exit 1
-fi
-
 if [ ! -d "$OW_DIR/.git" ]; then
 	echo ">> Cloning OpenWrt at $OW_COMMIT"
 	if [ -e "$OW_DIR" ] && [ -n "$(find "$OW_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
@@ -273,20 +264,13 @@ CONFIG_PACKAGE_curl=y
 CONFIG_PACKAGE_ca-bundle=y
 CONFIG_PACKAGE_ip-full=y
 CONFIG_PACKAGE_ruby=y
+# YJIT is optional and pulls rust/host (a full rustc/LLVM build) into the
+# toolchain.  OpenClash only needs the Ruby runtime and YAML extension.
+# CONFIG_RUBY_ENABLE_YJIT is not set
 CONFIG_PACKAGE_ruby-yaml=y
 CONFIG_PACKAGE_unzip=y
-# Node.js 24 for the target.  The package definition lives in
-# overlay/feeds/packages/lang/node because the pinned openwrt-24.10 packages
-# feed only ships Node 20.  Node 24 requires GCC 12.2 or newer for its host
-# toolset, so the build host needs both gcc-12 and g++-12; the preflight check
-# above fails early when either front end is missing.
-#
-# Compiling Node costs about five hours from a clean tree.  The GitHub Actions
-# workflow mirrors this selection and starts from a fresh checkout every run
-# with only dl/ cached, so that job runs close to its six-hour limit.
-CONFIG_PACKAGE_node=y
-CONFIG_PACKAGE_node-npm=y
-CONFIG_NODEJS_ICU_SMALL=y
+# Node.js is intentionally not part of the factory image: compiling it from
+# source costs several hours.  Users can install a matching package later.
 CONFIG_PACKAGE_luci-theme-argon=y
 CONFIG_PACKAGE_luci-app-argon-config=y
 CONFIG_LUCI_LANG_zh_Hans=y
@@ -298,6 +282,16 @@ CONFIG_PACKAGE_sfdisk=y
 CONFIG_PACKAGE_partx-utils=y
 CONFIG_PACKAGE_losetup=y
 CONFIG_PACKAGE_resize2fs=y
+# Docker engine and the LuCI container manager.  dockerd's package
+# dependencies pull containerd, runc, tini, iptables and the bridge/NAT
+# kernel modules; the explicit list keeps the intent visible.
+CONFIG_PACKAGE_docker=y
+CONFIG_PACKAGE_docker-compose=y
+CONFIG_PACKAGE_dockerd=y
+CONFIG_PACKAGE_containerd=y
+CONFIG_PACKAGE_runc=y
+CONFIG_PACKAGE_tini=y
+CONFIG_PACKAGE_luci-app-dockerman=y
 EOF
 if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 	cat >> .config <<'EOF'
@@ -350,9 +344,6 @@ for symbol in \
 	PACKAGE_ruby \
 	PACKAGE_ruby-yaml \
 	PACKAGE_unzip \
-	PACKAGE_node \
-	PACKAGE_node-npm \
-	NODEJS_ICU_SMALL \
 	PACKAGE_luci-theme-argon \
 	PACKAGE_luci-app-argon-config \
 	LUCI_LANG_zh_Hans \
@@ -363,10 +354,29 @@ for symbol in \
 	PACKAGE_sfdisk \
 	PACKAGE_partx-utils \
 	PACKAGE_losetup \
-	PACKAGE_resize2fs; do
+	PACKAGE_resize2fs \
+	PACKAGE_docker \
+	PACKAGE_docker-compose \
+	PACKAGE_dockerd \
+	PACKAGE_containerd \
+	PACKAGE_runc \
+	PACKAGE_tini \
+	PACKAGE_luci-app-dockerman; do
 	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
 	printf 'CONFIG_%s=y\n' "$symbol" >> .config
 done
+# Drop Node.js selections left behind by an older incremental .config, so
+# package/compile does not rebuild it.
+for symbol in PACKAGE_node PACKAGE_node-npm NODEJS_ICU_SMALL; do
+	sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
+done
+for symbol in PACKAGE_node PACKAGE_node-npm; do
+	printf '# CONFIG_%s is not set\n' "$symbol" >> .config
+done
+# YJIT is optional and forces a full rust/host (LLVM) build.  OpenClash only
+# needs the Ruby runtime and the YAML extension.
+sed -i '/^CONFIG_RUBY_ENABLE_YJIT=/d; /^# CONFIG_RUBY_ENABLE_YJIT is not set$/d' .config
+printf '%s\n' '# CONFIG_RUBY_ENABLE_YJIT is not set' >> .config
 if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 	for symbol in PACKAGE_git PACKAGE_git-http PACKAGE_make PACKAGE_gcc PACKAGE_binutils; do
 		sed -i "/^CONFIG_${symbol}=/d; /^# CONFIG_${symbol} is not set$/d" .config
@@ -391,18 +401,14 @@ sed -i '/^CONFIG_CCACHE=y$/d; /^# CONFIG_CCACHE is not set$/d' .config
 printf '%s\n' '# CONFIG_CCACHE is not set' >> .config
 # Keep the image root partition fixed rather than card-sized: first boot grows
 # the existing root partition and its filesystem on the actual target device,
-# so only the factory content has to fit here.  512 MiB covers an image root of
-# roughly 362 MiB (Node.js and npm are about 90 MiB of that; dockerd, containerd,
-# runc, the shims and the compose plugin add about 270 MiB).
+# so only the factory content has to fit here.  512 MiB covers the Docker
+# runtime and the rest of the factory root with headroom; Node.js is not part
+# of the image.
 #
 # Size this against the uncompressed size -- `du --apparent-size`, or the
-# "uncompressed filesystem size" that mksquashfs reports -- not `du -sh`.  This
-# host's ZFS stores the Go binaries in about half the space they occupy, but
-# make_ext4fs writes every byte, so the 362 MiB root costs about 390 MiB of
-# ext4.  That is also what hid behind the old 104 MiB layout, which failed to
-# allocate its last 9 blocks.  400 MiB fits today with only 13 MiB to spare and
-# 384 MiB already fails (make_ext4fs crashes instead of reporting the
-# shortage), so keep real headroom above the measured figure.
+# "uncompressed filesystem size" that mksquashfs reports -- not `du -sh`.
+# make_ext4fs writes every byte, so apparent size is what matters, and the
+# partition must keep real headroom above the measured root.
 sed -i '/^CONFIG_TARGET_ROOTFS_PARTSIZE=/d' .config
 printf '%s\n' 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' >> .config
 
@@ -410,7 +416,7 @@ echo ">> Configure"
 run_logged "$LOG_DIR/defconfig.log" make defconfig
 cp .config "$LOG_DIR/openwrt.config"
 grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config || {
-	echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Node.js and Docker)' >&2
+	echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Docker and headroom)' >&2
 	exit 1
 }
 grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled' >&2; exit 1; }
@@ -421,17 +427,27 @@ if ! grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
 	echo 'OpenClash app was not selected for the factory image' >&2
 	exit 1
 fi
-grep -qx 'CONFIG_PACKAGE_node=y' .config || {
-	echo 'Node.js is not selected for the factory image' >&2
+if grep -qx 'CONFIG_PACKAGE_node=y' .config || grep -qx 'CONFIG_PACKAGE_node-npm=y' .config; then
+	echo 'Node.js must not be selected for the factory image' >&2
 	exit 1
-}
-# The node package exposes a Kconfig choice for its i18n backend.  Only
-# small-icu is self-contained: system-icu would pull icu and icu-full-data into
-# the image, and none would break any dependency that expects Intl.
-grep -qx 'CONFIG_NODEJS_ICU_SMALL=y' .config || {
-	echo 'Node.js was not configured with the small-icu i18n backend' >&2
+fi
+if grep -qx 'CONFIG_RUBY_ENABLE_YJIT=y' .config; then
+	echo 'Ruby YJIT must be disabled: it forces a rust/host (LLVM) build' >&2
 	exit 1
-}
+fi
+for symbol in \
+	PACKAGE_docker \
+	PACKAGE_docker-compose \
+	PACKAGE_dockerd \
+	PACKAGE_containerd \
+	PACKAGE_runc \
+	PACKAGE_tini \
+	PACKAGE_luci-app-dockerman; do
+	grep -qx "CONFIG_${symbol}=y" .config || {
+		echo "Docker package was not selected for the factory image: ${symbol}" >&2
+		exit 1
+	}
+done
 
 echo ">> Download sources"
 run_logged "$LOG_DIR/download.log" make -j"$JOBS" download
@@ -474,13 +490,6 @@ test -L "$STORAGE_ROOT/etc/rc.d/S99opi3lts-expand-storage" || {
 	exit 1
 }
 
-# The Node.js runtime is selected in .config above; make sure package/install
-# actually copied it into the image root, so a factory card ships with it.
-test -x "$STORAGE_ROOT/usr/bin/node" || {
-	echo 'Node.js runtime is missing from the image root' >&2
-	exit 1
-}
-
 echo ">> Generate package indexes and checksums"
 run_logged "$LOG_DIR/package-index.log" make -j"$JOBS" package/index json_overview_image_info checksum
 
@@ -510,6 +519,10 @@ if ! grep -q '^luci-app-openclash ' "$MANIFEST"; then
 	exit 1
 fi
 echo 'OpenClash v0.48.002 app and runtime dependencies are bundled'
+for package in dockerd docker containerd runc tini docker-compose luci-app-dockerman; do
+	grep -q "^${package} " "$MANIFEST" || { echo "Docker package is missing: $package" >&2; exit 1; }
+done
+echo 'Docker engine and LuCI Dockerman are bundled'
 find "$IMAGE_DIR" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
 cat "$LOG_DIR/images.txt"
 grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated' >&2; exit 1; }

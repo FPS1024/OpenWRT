@@ -22,10 +22,8 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # GitHub-hosted runners cap a job at six hours and that is also the default,
-    # so this cannot be raised.  Node.js 24 has to be compiled from scratch on
-    # every run (only dl/ is cached), which costs several hours and puts this
-    # job close to the limit.
+    # GitHub-hosted runners cap a job at six hours.  The image does not build
+    # Node.js from source, so the job finishes well inside that limit.
     timeout-minutes: 360
     env:
       INCLUDE_DEV_TOOLS: ${{ inputs.include_dev_tools && '1' || '0' }}
@@ -37,20 +35,6 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           df -h /
-
-      - name: Ensure a GCC 12 host toolchain
-        run: |
-          # Node.js 24 requires GCC 12.2 or newer for its gyp "host" toolset.
-          # The runner's default gcc is 11, and the node package switches to
-          # gcc-12/g++-12 only when BOTH are on PATH -- installing just one
-          # leaves CXX_host empty and gyp then emits compile lines that start
-          # with the compiler's arguments instead of a compiler.
-          if ! command -v gcc-12 >/dev/null 2>&1 || ! command -v g++-12 >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y gcc-12 g++-12
-          fi
-          gcc-12 --version | head -1
-          g++-12 --version | head -1
 
       - name: Clone pinned OpenWrt source
         run: |
@@ -118,15 +102,11 @@ jobs:
           CONFIG_PACKAGE_ca-bundle=y
           CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_ruby=y
+          # YJIT pulls a full rustc/LLVM host build; OpenClash does not need it.
+          # CONFIG_RUBY_ENABLE_YJIT is not set
           CONFIG_PACKAGE_ruby-yaml=y
           CONFIG_PACKAGE_unzip=y
-          # Node.js 24 for the target. The package definition lives in
-          # overlay/feeds/packages/lang/node because the pinned openwrt-24.10
-          # packages feed only ships Node 20. Node 24 needs GCC 12.2 or newer
-          # for its host toolset, which the step above provides.
-          CONFIG_PACKAGE_node=y
-          CONFIG_PACKAGE_node-npm=y
-          CONFIG_NODEJS_ICU_SMALL=y
+          # Node.js is intentionally not built into the factory image.
           CONFIG_PACKAGE_luci-theme-argon=y
           CONFIG_PACKAGE_luci-app-argon-config=y
           CONFIG_LUCI_LANG_zh_Hans=y
@@ -138,6 +118,16 @@ jobs:
           CONFIG_PACKAGE_partx-utils=y
           CONFIG_PACKAGE_losetup=y
           CONFIG_PACKAGE_resize2fs=y
+          # Docker engine and the LuCI container manager.  dockerd's package
+          # dependencies pull containerd, runc, tini, iptables and the
+          # bridge/NAT kernel modules; the explicit list keeps the intent visible.
+          CONFIG_PACKAGE_docker=y
+          CONFIG_PACKAGE_docker-compose=y
+          CONFIG_PACKAGE_dockerd=y
+          CONFIG_PACKAGE_containerd=y
+          CONFIG_PACKAGE_runc=y
+          CONFIG_PACKAGE_tini=y
+          CONFIG_PACKAGE_luci-app-dockerman=y
           EOF
           if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
             cat >> .config <<'EOF'
@@ -167,7 +157,7 @@ jobs:
           printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
           make defconfig > "$LOG_DIR/defconfig.log" 2>&1 || { cat "$LOG_DIR/defconfig.log"; exit 1; }
           cp .config "$LOG_DIR/openwrt.config"
-          grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config || { echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Node.js and Docker)'; exit 1; }
+          grep -qx 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config || { echo 'Unexpected rootfs partition size: the fixed factory partition must hold the image root (512 MiB with Docker and headroom)'; exit 1; }
           grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled'; exit 1; }
           grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled'; exit 1; }
@@ -176,11 +166,17 @@ jobs:
             echo 'OpenClash app was not selected for the factory image'
             exit 1
           fi
-          grep -qx 'CONFIG_PACKAGE_node=y' .config || { echo 'Node.js was not selected by defconfig'; exit 1; }
-          # The node package exposes a Kconfig choice for its i18n backend.
-          # Only small-icu is self-contained: system-icu would pull icu and
-          # icu-full-data into the image, and none breaks anything expecting Intl.
-          grep -qx 'CONFIG_NODEJS_ICU_SMALL=y' .config || { echo 'Node.js was not configured with the small-icu i18n backend'; exit 1; }
+          if grep -qx 'CONFIG_PACKAGE_node=y' .config || grep -qx 'CONFIG_PACKAGE_node-npm=y' .config; then
+            echo 'Node.js must not be selected for the factory image'
+            exit 1
+          fi
+          if grep -qx 'CONFIG_RUBY_ENABLE_YJIT=y' .config; then
+            echo 'Ruby YJIT must be disabled: it forces a rust/host (LLVM) build'
+            exit 1
+          fi
+          for package in docker docker-compose dockerd containerd runc tini luci-app-dockerman; do
+            grep -qx "CONFIG_PACKAGE_${package}=y" .config || { echo "Docker package was not selected by defconfig: $package"; exit 1; }
+          done
           grep -qx 'CONFIG_PACKAGE_sfdisk=y' .config || { echo 'sfdisk was not selected by defconfig'; exit 1; }
           for package in \
             luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
@@ -261,10 +257,6 @@ jobs:
             echo 'SD-card expansion init script is not enabled at S99'
             exit 1
           }
-          test -x "$storage_root/usr/bin/node" || {
-            echo 'Node.js runtime is missing from the image root'
-            exit 1
-          }
           stage package-index make -j"$JOBS" package/index json_overview_image_info checksum || exit 1
           image_dir=bin/targets/sunxi/cortexa53
           manifest="$image_dir/openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts.manifest"
@@ -273,7 +265,6 @@ jobs:
             luci-base luci-mod-admin-full uhttpd uhttpd-mod-ubus \
             dnsmasq-full libnettle8 libnetfilter-conntrack3 \
             bash curl ca-bundle ip-full ruby ruby-yaml unzip \
-            node node-npm libcares \
             sfdisk partx-utils losetup resize2fs \
             luci-theme-argon luci-app-argon-config \
             luci-i18n-argon-config-zh-cn luci-i18n-base-zh-cn \
@@ -290,6 +281,10 @@ jobs:
             exit 1
           fi
           echo 'OpenClash v0.48.002 app and runtime dependencies are bundled'
+          for package in dockerd docker containerd runc tini docker-compose luci-app-dockerman; do
+            grep -q "^${package} " "$manifest" || { echo "Docker package is missing: $package"; exit 1; }
+          done
+          echo 'Docker engine and LuCI Dockerman are bundled'
           find "$image_dir" -maxdepth 1 -type f -name '*xunlong_orangepi-3-lts*' -print > "$LOG_DIR/images.txt"
           grep -q '\.img\.gz$' "$LOG_DIR/images.txt" || { echo 'Orange Pi 3 LTS .img.gz image was not generated'; cat "$LOG_DIR/images.txt"; exit 1; }
           squashfs_image="$image_dir/openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img.gz"
@@ -326,9 +321,6 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
             ${{ env.OPENWRT_DIR }}/bin/packages/*/*/luci-app-openclash_*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node_*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/node-npm_*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/packages/libcares_*.ipk
           # The image includes the pinned OpenClash v0.48.002 app and its runtime dependencies.
           if-no-files-found: warn
 
