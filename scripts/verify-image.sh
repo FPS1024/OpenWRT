@@ -59,8 +59,11 @@ set -- $geometry
 root_partition=$1
 root_start=$2
 root_sectors=$3
-[ "$root_sectors" -gt 0 ] && [ "$root_sectors" -le 524288 ] || {
-	echo "Root partition is not small: $root_sectors sectors" >&2
+# The factory root is 512 MiB (CONFIG_TARGET_ROOTFS_PARTSIZE=512) so it can
+# hold Docker.  Allow up to 1 GiB here; the point of the check is to reject an
+# accidentally multi-gigabyte image, not the configured 512 MiB partition.
+[ "$root_sectors" -gt 0 ] && [ "$root_sectors" -le 2097152 ] || {
+	echo "Root partition is unexpectedly large: $root_sectors sectors" >&2
 	exit 1
 }
 dd if="$tmpdir/image.raw" of="$tmpdir/root-partition.img" bs=512 skip="$root_start" count="$root_sectors" status=none
