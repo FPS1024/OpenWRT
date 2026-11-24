@@ -10,16 +10,15 @@
  dtb-$(CONFIG_ARCH_SUNXI) += sun50i-h6-pine-h64.dtb
 --- a/arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-3-lts.dts
 +++ b/arch/arm64/boot/dts/allwinner/sun50i-h6-orangepi-3-lts.dts
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,377 @@
 +// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 +/*
 + * Orange Pi 3 LTS (Allwinner H6)
 + *
 + * Mirrors the known-good, runnable board DT supplied for this board
 + * (decompiled from sun50i-h6-orangepi-3-lts.dtb), trimmed to the nodes
-+ * that exist in the OpenWrt 24.10 kernel (6.6). The AC200 audio /
-+ * analog-codec / HDMI-sound / i2c3 nodes present in newer trees are
-+ * omitted because they do not exist in 6.6 (audio is unused on a router).
++ * needed by this OpenWrt 25.12 router image. The AC200 audio /
++ * analog-codec / HDMI-sound / i2c3 nodes are omitted because audio is unused.
 + *
 + * Wi-Fi/BT is a Unisoc UWE5622 (Allwinner AW859A) SDIO combo; handled by
 + * the out-of-tree "sprdwl_ng" driver in package/kernel/uwe5622. It is

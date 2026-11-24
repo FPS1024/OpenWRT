@@ -2,7 +2,7 @@
 # Reproducible OpenWrt build for Orange Pi 3 LTS.
 set -eu
 
-OW_COMMIT="${OW_COMMIT:-58584c6f2829a7e5d77376ab68aae3dcc4a392d8}"
+OW_COMMIT="${OW_COMMIT:-64900e756efa667774214f9c6b17c113222e01f7}"
 JOBS="${JOBS:-$(nproc)}"
 INCLUDE_DEV_TOOLS="${INCLUDE_DEV_TOOLS:-0}"
 DEVICE="xunlong_orangepi-3-lts"
@@ -198,6 +198,11 @@ fi
 if ! git -C "$OW_DIR" cat-file -e "$OW_COMMIT^{commit}" 2>/dev/null; then
 	git -C "$OW_DIR" fetch --depth 1 origin "$OW_COMMIT"
 fi
+# This directory is an OpenWrt build tree. Project customizations live in
+# overlay/ and are reapplied below, so reset tracked files changed by an
+# earlier overlay before switching the source revision. Keep ignored build
+# state, downloads, and untracked overlay files intact.
+git -C "$OW_DIR" reset --hard
 git -C "$OW_DIR" checkout --detach "$OW_COMMIT"
 echo "OpenWrt: $(git -C "$OW_DIR" rev-parse HEAD)"
 
@@ -229,7 +234,7 @@ if ! sh "$HERE/scripts/prepare-openclash.sh" "$OW_DIR" > "$LOG_DIR/openclash-sou
 fi
 cat "$LOG_DIR/openclash-sources.txt"
 if [ -d "$OW_DIR/bin/packages" ]; then
-	find "$OW_DIR/bin/packages" -type f -name 'luci-app-openclash*.ipk' -delete
+	find "$OW_DIR/bin/packages" -type f \( -name 'luci-app-openclash*.ipk' -o -name 'luci-app-openclash*.apk' \) -delete
 fi
 
 if [ ! -s .config ] \
@@ -540,7 +545,7 @@ done
 : > "$LOG_DIR/uwe5622-packages.txt"
 for package_dir in "$IMAGE_DIR/packages" bin/packages; do
 	if [ -d "$package_dir" ]; then
-		find "$package_dir" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
+		find "$package_dir" -type f \( -name 'kmod-uwe5622*.apk' -o -name 'uwe5622-firmware*.apk' -o -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
 	fi
 done
 cat "$LOG_DIR/uwe5622-packages.txt"

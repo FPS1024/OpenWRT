@@ -6,7 +6,7 @@
 
 | 部分 | 项目实现 |
 | --- | --- |
-| 内核 | OpenWrt 24.10 固定源码，Linux 6.6 |
+| 内核 | OpenWrt 25.12.6 固定源码，Linux 6.12 |
 | 驱动 | `kmod-uwe5622`，使用 `armbian/uwe5622` commit `d6bec7538a0b4b67e35715ad71eaa056555524cb` |
 | 模块 | `uwe5622_bsp_sdio.ko`（SDIO/WCN 总线）和 `sprdwl_ng.ko`（cfg80211 Wi-Fi） |
 | 固件 | `uwe5622-firmware`，安装到 `/lib/firmware/uwe5622/` |
@@ -17,7 +17,7 @@
 
 ## 设备树与 SDIO 上电
 
-UWE5622 通过 H6 的 **MMC1 / SDIO** 总线连接。设备树补丁在 `overlay/target/linux/sunxi/patches-6.6/460-arm64-dts-allwinner-add-orangepi-3-lts.patch`，关键设置包括：
+UWE5622 通过 H6 的 **MMC1 / SDIO** 总线连接。设备树补丁在 `overlay/target/linux/sunxi/patches-6.12/460-arm64-dts-allwinner-add-orangepi-3-lts.patch`，关键设置包括：
 
 - `mmc1` 使用 4-bit、不可移除 SDIO 设备，并引用 `wifi_pwrseq`。
 - `vcc33-wifi` 通过 PH7 控制 Wi-Fi 3.3 V 电源。
@@ -30,11 +30,11 @@ UWE5622 通过 H6 的 **MMC1 / SDIO** 总线连接。设备树补丁在 `overlay
 
 ## 驱动补丁与内核 API
 
-驱动来自树外的社区内核模块，需适配 OpenWrt 提供的 Linux 6.6 和 mac80211 backport。当前补丁主要处理：
+驱动来自树外的社区内核模块，需适配 OpenWrt 提供的 Linux 6.12 和 mac80211 backport。当前补丁主要处理：
 
 - cfg80211 backport API 兼容，以及外部模块 Kbuild 配置符号传递。
 - cfg80211/netdev 锁使用、连接和漫游状态同步。
-- Linux 6.6 对 station/channel 查询、station dump 和可变长数组的变化。
+- Linux 6.12 对 station/channel 查询、station dump 和可变长数组的变化。
 - 驱动关闭省电时避免误执行芯片断电。
 
 补丁按序号存放在 `overlay/package/kernel/uwe5622/patches/`。不要恢复旧的 `080-cfg80211-set-wiphy-params-backport-radio-idx.patch`：当前固定的 OpenWrt cfg80211 回调要求两参数函数；该旧补丁会强制三参数签名，导致 `incompatible-pointer-types` 编译失败。

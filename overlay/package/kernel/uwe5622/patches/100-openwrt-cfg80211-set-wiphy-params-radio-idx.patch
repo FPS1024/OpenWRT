@@ -1,0 +1,12 @@
+--- a/unisocwifi/cfg80211.c
++++ b/unisocwifi/cfg80211.c
+@@ -2556,7 +2556,8 @@ static int sprdwl_cfg80211_set_wiphy_params(struct wiphy *wiphy, u32 changed)
+ 	return ret;
+ }
+ 
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 17, 0) || \
++	defined(OPENWRT_CFG80211_BACKPORT)
+ static int sprdwl_cfg80211_set_wiphy_params(struct wiphy *wiphy, int radio_idx, u32 changed)
+ #else
+ static int sprdwl_cfg80211_set_wiphy_params(struct wiphy *wiphy, u32 changed)

@@ -8,8 +8,7 @@ fi
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 OW_DIR="$1"
-KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/config-6.6"
-CORTEXA53_KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/cortexa53/config-6.6"
+CORTEXA53_KERNEL_CONFIG="$OW_DIR/target/linux/sunxi/cortexa53/config-6.12"
 
 find "$HERE/overlay" -type f -print | while IFS= read -r source_file; do
 	relative_path=${source_file#"$HERE/overlay/"}
@@ -22,9 +21,13 @@ find "$HERE/overlay" -type f -print | while IFS= read -r source_file; do
 	touch "$target_file"
 done
 
-# Drop this obsolete project patch from an existing local build tree. It forces
-# a three-argument callback although the pinned OpenWrt 24.10 header expects
-# the two-argument set_wiphy_params callback.
+# Remove the old project DTS patch after switching from the Linux 6.6 tree.
+rm -f "$OW_DIR/target/linux/sunxi/patches-6.6/460-arm64-dts-allwinner-add-orangepi-3-lts.patch"
+rmdir "$OW_DIR/target/linux/sunxi/patches-6.6" 2>/dev/null || true
+
+# Drop this obsolete project patch from existing build trees. It forced the
+# three-argument callback unconditionally; the current patch selects that
+# signature only when the cfg80211 backport API is enabled.
 rm -f "$OW_DIR/package/kernel/uwe5622/patches/080-cfg80211-set-wiphy-params-backport-radio-idx.patch"
 
 # The overlay copies files but never deletes them, so patches that the feeds
@@ -32,19 +35,6 @@ rm -f "$OW_DIR/package/kernel/uwe5622/patches/080-cfg80211-set-wiphy-params-back
 # patch: its context targets the old gyp make.py template, and this project
 # only ever builds on Linux.
 rm -f "$OW_DIR/feeds/packages/lang/node/patches/007-fix_host_build_on_macos.patch"
-
-# Linux 6.6 receives a backport that makes REALTEK_PHY_HWMON a visible Kconfig
-# option. Since REALTEK_PHY is enabled for sunxi, pin the optional HWMON choice
-# in the kernel config fragment so non-interactive syncconfig does not prompt.
-if ! grep -q '^CONFIG_REALTEK_PHY=y$' "$KERNEL_CONFIG"; then
-	echo "Expected CONFIG_REALTEK_PHY=y in $KERNEL_CONFIG" >&2
-	exit 1
-fi
-HWMON_DISABLED='# CONFIG_REALTEK_PHY_HWMON is not set'
-if ! grep -Fqx "$HWMON_DISABLED" "$KERNEL_CONFIG" || grep -q '^CONFIG_REALTEK_PHY_HWMON=' "$KERNEL_CONFIG"; then
-	sed -i '/^CONFIG_REALTEK_PHY_HWMON=/d; /^# CONFIG_REALTEK_PHY_HWMON is not set$/d' "$KERNEL_CONFIG"
-	printf '%s\n' "$HWMON_DISABLED" >> "$KERNEL_CONFIG"
-fi
 
 # The H6 RTC driver also registers the OSC32K_FANOUT clock provider used by
 # the Orange Pi 3 LTS Wi-Fi MMC power sequence. Without RTC_CLASS the provider

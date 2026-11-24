@@ -9,13 +9,13 @@ on:
         default: false
         type: boolean
   push:
-    branches: [main]
+    branches: [main, 'upgrade/**']
 
 permissions:
   contents: read
 
 env:
-  OW_COMMIT: 58584c6f2829a7e5d77376ab68aae3dcc4a392d8
+  OW_COMMIT: 64900e756efa667774214f9c6b17c113222e01f7
   OPENWRT_DIR: ${{ github.workspace }}/.work/openwrt
   LOG_DIR: ${{ github.workspace }}/_logs
 
@@ -69,7 +69,7 @@ jobs:
           sh "$GITHUB_WORKSPACE/scripts/prepare-openclash.sh" "$OPENWRT_DIR" > "$LOG_DIR/openclash-sources.txt" 2>&1 || { cat "$LOG_DIR/openclash-sources.txt"; exit 1; }
           cat "$LOG_DIR/openclash-sources.txt"
           if [ -d bin/packages ]; then
-            find bin/packages -type f -name 'luci-app-openclash*.ipk' -delete
+            find bin/packages -type f \( -name 'luci-app-openclash*.ipk' -o -name 'luci-app-openclash*.apk' \) -delete
           fi
           cat > .config <<'EOF'
           CONFIG_TARGET_sunxi=y
@@ -298,7 +298,7 @@ jobs:
           : > "$LOG_DIR/uwe5622-packages.txt"
           for package_dir in "$image_dir/packages" bin/packages; do
             if [ -d "$package_dir" ]; then
-              find "$package_dir" -type f \( -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
+              find "$package_dir" -type f \( -name 'kmod-uwe5622*.apk' -o -name 'uwe5622-firmware*.apk' -o -name 'kmod-uwe5622*.ipk' -o -name 'uwe5622-firmware*.ipk' \) -print >> "$LOG_DIR/uwe5622-packages.txt"
             fi
           done
           grep -q 'kmod-uwe5622' "$LOG_DIR/uwe5622-packages.txt" || { echo 'kmod-uwe5622 package was not generated'; cat "$LOG_DIR/uwe5622-packages.txt"; exit 1; }
@@ -312,15 +312,15 @@ jobs:
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.img.gz
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/*.manifest
             ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/sha256sums
-            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/packages/kmod-uwe5622*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/uwe5622-firmware*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-theme-argon*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-app-argon-config*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-i18n-argon-config-zh-cn*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.ipk
-            ${{ env.OPENWRT_DIR }}/bin/packages/*/*/luci-app-openclash_*.ipk
+            ${{ env.OPENWRT_DIR }}/bin/targets/sunxi/cortexa53/packages/kmod-uwe5622*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/uwe5622-firmware*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-theme-argon*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-app-argon-config*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/base/luci-i18n-argon-config-zh-cn*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-base-zh-cn*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-firewall-zh-cn*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/luci/luci-i18n-package-manager-zh-cn*.apk
+            ${{ env.OPENWRT_DIR }}/bin/packages/*/*/luci-app-openclash-*.apk
           # The image includes the pinned OpenClash v0.48.002 app and its runtime dependencies.
           if-no-files-found: warn
 

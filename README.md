@@ -1,6 +1,6 @@
 # Orange Pi 3 LTS · OpenWrt AP 路由器
 
-为全志 H6 的 Orange Pi 3 LTS 构建 OpenWrt 24.10（Linux 6.6），包含板级 DTS、UWE5622 Wi-Fi 驱动、默认 AP、LuCI 网页管理、Argon 主题和简体中文界面。OpenWrt 源码固定在 [`58584c6`](https://github.com/openwrt/openwrt/commit/58584c6f2829a7e5d77376ab68aae3dcc4a392d8)。
+为全志 H6 的 Orange Pi 3 LTS 构建 OpenWrt 25.12.6（Linux 6.12），包含板级 DTS、UWE5622 Wi-Fi 驱动、默认 AP、LuCI 网页管理、Argon 主题和简体中文界面。OpenWrt 源码固定在 [`64900e7`](https://github.com/openwrt/openwrt/commit/64900e756efa667774214f9c6b17c113222e01f7)。
 
 Wi-Fi 已在 Orange Pi 3 LTS 实机上验证：手机可连接 AP、获取地址并通过有线 WAN 上网。驱动适配细节和排错步骤见 [Wi-Fi 驱动适配说明](README-WIFI.md)。
 
@@ -47,11 +47,13 @@ sh scripts/build.sh
 OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 ```
 
+`OPENWRT_DIR` 是构建目录；脚本会重置其中被改动的 OpenWrt 跟踪文件，再切换到固定源码版本并重新应用本仓库的 `overlay/`。请把自定义修改放在 `overlay/` 中。
+
 也可推送到 `main` 或在 GitHub Actions 手动运行 **Build OpenWrt for Orange Pi 3 LTS**。成功后打开该次 workflow run 页面底部的 **Artifacts**，下载 `openwrt-opi3lts`。压缩包包含刷机镜像、manifest、校验文件和 Wi-Fi 驱动包；构建日志在单独的 `build-diagnostics` artifact 中。本地和 CI 的镜像位于 `bin/targets/sunxi/cortexa53/`，包含 ext4 与 squashfs SD 卡镜像。
 
 Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，因此不会为开发工具付出额外的长时间编译。手动运行 workflow 时把 `include_dev_tools` 设为 true，或本地使用 `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh`，才会把这批工具放进固件。构建日志按 `package-compile`、`package-install`、`target-install` 和 `package-index` 分阶段保存；其中 `target-install` 是实际制作镜像的短阶段。
 
-固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。Ruby 的 YJIT 在构建时关闭，避免为 JIT 额外编译整套 rustc/LLVM。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。默认镜像不包含 Node.js；需要时请自行从软件源安装（官方 openwrt-24.10 源提供 Node 20，仓库 `overlay/feeds/packages/lang/node` 中的 Node 24 包定义保留但不再默认选中）。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
+固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。Ruby 的 YJIT 在构建时关闭，避免为 JIT 额外编译整套 rustc/LLVM。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。默认镜像不包含 Node.js；需要时请自行从软件源安装（官方 openwrt-25.12 源提供 Node 22，仓库 `overlay/feeds/packages/lang/node` 中的 Node 24 包定义保留但不再默认选中）。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
 
 固件内置 OpenClash LuCI 插件，版本固定为 [v0.48.002](https://github.com/vernesong/OpenClash/releases/tag/v0.48.002)，构建时下载并安装 `luci-app-openclash_0.48.002_all.ipk`。脚本固定校验 SHA-256 `f3f0d0514553aea8d542c62dc52ac26d1f79dbda24204280f1cb8ea7fff71e9e`，并检查 IPK 的包名、版本、架构以及 OpenClash 运行依赖已经进入镜像。
 
@@ -64,7 +66,7 @@ df -h
 ls -l /etc/opi3lts-storage-expanded
 ```
 
-GitHub Actions 可选发送构建通知邮件。到仓库 **Settings → Secrets and variables → Actions** 添加 `SMTP_USERNAME` 和 `SMTP_PASSWORD`；默认使用 Outlook.com 的 `smtp-mail.outlook.com:587`，也可以添加可选的 `SMTP_SERVER` 覆盖服务器地址。Outlook 通常需要启用 SMTP AUTH 或使用应用专用密码。未配置 Secrets 时只跳过通知，不影响构建结果。刷机后可运行 `opkg update` 安装其他用户态软件，避免从滚动 Snapshot 源重复安装这些已内置依赖。
+GitHub Actions 可选发送构建通知邮件。到仓库 **Settings → Secrets and variables → Actions** 添加 `SMTP_USERNAME` 和 `SMTP_PASSWORD`；默认使用 Outlook.com 的 `smtp-mail.outlook.com:587`，也可以添加可选的 `SMTP_SERVER` 覆盖服务器地址。Outlook 通常需要启用 SMTP AUTH 或使用应用专用密码。未配置 Secrets 时只跳过通知，不影响构建结果。刷机后可运行 `apk update` 安装其他用户态软件，避免从滚动 Snapshot 源重复安装这些已内置依赖。
 
 ## 刷写
 
