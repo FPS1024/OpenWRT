@@ -1,74 +1,74 @@
-# UWE5622 Wi-Fi 驱动适配说明
+# UWE5622 Wi-Fi Driver Notes
 
-本文记录 Orange Pi 3 LTS 上 UNISOC UWE5622（板载 AW859A Wi-Fi/BT 组合模块）的 OpenWrt 适配方式、启动依赖和实机排错方法。当前项目验证的是 Wi-Fi AP；蓝牙不在本次适配范围内。
+This document describes how the UNISOC UWE5622 (onboard AW859A Wi-Fi/BT combo module) is adapted to OpenWrt on the Orange Pi 3 LTS, including boot dependencies and real-hardware troubleshooting. This project validates Wi-Fi AP mode; Bluetooth is out of scope.
 
-## 适配组成
+## Components
 
-| 部分 | 项目实现 |
+| Part | Implementation |
 | --- | --- |
-| 内核 | OpenWrt 25.12.6 固定源码，Linux 6.12 |
-| 驱动 | `kmod-uwe5622`，使用 `armbian/uwe5622` commit `d6bec7538a0b4b67e35715ad71eaa056555524cb` |
-| 模块 | `uwe5622_bsp_sdio.ko`（SDIO/WCN 总线）和 `sprdwl_ng.ko`（cfg80211 Wi-Fi） |
-| 固件 | `uwe5622-firmware`，安装到 `/lib/firmware/uwe5622/` |
-| 无线管理 | OpenWrt mac80211/cfg80211、hostapd、wifi-scripts |
-| 板级硬件 | 本项目的 Orange Pi 3 LTS DTS：`sun50i-h6-orangepi-3-lts.dts` |
+| Kernel | OpenWrt 25.12.6 pinned source, Linux 6.12 |
+| Driver | `kmod-uwe5622`, from `armbian/uwe5622` commit `d6bec7538a0b4b67e35715ad71eaa056555524cb` |
+| Modules | `uwe5622_bsp_sdio.ko` (SDIO/WCN bus) and `sprdwl_ng.ko` (cfg80211 Wi-Fi) |
+| Firmware | `uwe5622-firmware`, installed to `/lib/firmware/uwe5622/` |
+| Wireless stack | OpenWrt mac80211/cfg80211, hostapd, wifi-scripts |
+| Board support | This project's Orange Pi 3 LTS DTS: `sun50i-h6-orangepi-3-lts.dts` |
 
-驱动包的源码版本、内核构建参数和补丁位于 `overlay/package/kernel/uwe5622/`；固件文件及安装规则位于 `overlay/package/firmware/uwe5622-firmware/`。
+The driver package source revision, kernel build arguments and patches are under `overlay/package/kernel/uwe5622/`; the firmware files and install rules are under `overlay/package/firmware/uwe5622-firmware/`.
 
-## 设备树与 SDIO 上电
+## Device tree and SDIO power-up
 
-UWE5622 通过 H6 的 **MMC1 / SDIO** 总线连接。设备树补丁在 `overlay/target/linux/sunxi/patches-6.12/460-arm64-dts-allwinner-add-orangepi-3-lts.patch`，关键设置包括：
+UWE5622 is connected through the H6's **MMC1 / SDIO** bus. The device-tree patch is `overlay/target/linux/sunxi/patches-6.12/460-arm64-dts-allwinner-add-orangepi-3-lts.patch`; key settings include:
 
-- `mmc1` 使用 4-bit、不可移除 SDIO 设备，并引用 `wifi_pwrseq`。
-- `vcc33-wifi` 通过 PH7 控制 Wi-Fi 3.3 V 电源。
-- 电源时序通过 `mmc-pwrseq-simple` 控制 PM3 低有效复位，并在上电后等待 200 ms。
-- 电源时序需要 H6 RTC 提供 `CLK_OSC32K_FANOUT` 外部时钟。
+- `mmc1` is a 4-bit, non-removable SDIO device and references `wifi_pwrseq`.
+- `vcc33-wifi` controls the Wi-Fi 3.3 V supply through PH7.
+- The power sequence drives the active-low PM3 reset through `mmc-pwrseq-simple` and waits 200 ms after power-up.
+- The power sequence needs the H6 RTC to provide the `CLK_OSC32K_FANOUT` external clock.
 
-因此 `scripts/apply-overlay.sh` 会在 sunxi Cortex-A53 内核配置中启用 `CONFIG_RTC_CLASS=y` 和 `CONFIG_RTC_DRV_SUN6I=y`。缺少 RTC 时钟提供者时，内核会报告 `wifi-pwrseq: external clock not ready`，设备留在 `devices_deferred`，MMC1 不会枚举 SDIO 卡；这时先修复设备树/内核时钟依赖，单独重编 Wi-Fi 模块无济于事。
+`scripts/apply-overlay.sh` therefore enables `CONFIG_RTC_CLASS=y` and `CONFIG_RTC_DRV_SUN6I=y` in the sunxi Cortex-A53 kernel configuration. Without the RTC clock provider the kernel reports `wifi-pwrseq: external clock not ready`, the device stays in `devices_deferred`, and MMC1 never enumerates the SDIO card. Fix the device tree/kernel clock dependency first; rebuilding the Wi-Fi module alone will not help.
 
-不要用普通 Orange Pi 3 的 DTS 代替 LTS 设备树。LTS 板的 PMIC、GPIO、电源和无线连接需要按本项目的 `sun50i-h6-orangepi-3-lts.dts` 处理。
+Do not substitute the device tree of a regular Orange Pi 3 for the LTS tree. The LTS board's PMIC, GPIOs, power and wireless wiring must be handled by this project's `sun50i-h6-orangepi-3-lts.dts`.
 
-## 驱动补丁与内核 API
+## Driver patches and kernel API
 
-驱动来自树外的社区内核模块，需适配 OpenWrt 提供的 Linux 6.12 和 mac80211 backport。当前补丁主要处理：
+The driver is an out-of-tree community kernel module and must be adapted to the Linux 6.12 and mac80211 backport provided by OpenWrt. The current patches mainly handle:
 
-- cfg80211 backport API 兼容，以及外部模块 Kbuild 配置符号传递。
-- cfg80211/netdev 锁使用、连接和漫游状态同步。
-- Linux 6.12 对 station/channel 查询、station dump 和可变长数组的变化。
-- 驱动关闭省电时避免误执行芯片断电。
+- cfg80211 backport API compatibility and passing external-module Kbuild configuration symbols.
+- cfg80211/netdev locking and connect/roam state synchronization.
+- Linux 6.12 changes to station/channel queries, station dump and variable-length arrays.
+- Avoiding an accidental chip power-down when power saving is disabled.
 
-补丁按序号存放在 `overlay/package/kernel/uwe5622/patches/`。不要恢复旧的 `080-cfg80211-set-wiphy-params-backport-radio-idx.patch`：当前固定的 OpenWrt cfg80211 回调要求两参数函数；该旧补丁会强制三参数签名，导致 `incompatible-pointer-types` 编译失败。
+Patches are stored in numeric order under `overlay/package/kernel/uwe5622/patches/`. Do not restore the old `080-cfg80211-set-wiphy-params-backport-radio-idx.patch`: the pinned OpenWrt cfg80211 callback expects a two-argument function, while that old patch forces a three-argument signature and fails to compile with `incompatible-pointer-types`.
 
-构建必须先准备目标内核和 mac80211 backport，再编译 `package/kernel/uwe5622`。本项目脚本和 Actions 会按该顺序构建，并检查最终镜像清单及 UWE5622 驱动/固件包。
+The build must prepare the target kernel and mac80211 backport before compiling `package/kernel/uwe5622`. This project's scripts and Actions follow that order and check the final image manifest and the UWE5622 driver/firmware packages.
 
-## 延迟加载与默认 AP
+## Delayed loading and the default AP
 
-无线硬件晚于系统启动早期出现，因此驱动包不使用内核自动加载列表。`sprdwl-delay` 由 procd 在较晚阶段启动，等待后依次加载 `uwe5622_bsp_sdio`、`sprdwl_ng`，并等待 cfg80211 phy 出现。phy 就绪后再执行 `wifi config`，避免 OpenWrt 在无线设备尚不存在时漏掉 radio 配置。
+The wireless hardware appears later than early boot, so the driver package does not use the kernel's automatic load list. `sprdwl-delay` is started by procd at a later stage; it waits, loads `uwe5622_bsp_sdio` and `sprdwl_ng` in order, and waits for the cfg80211 phy to appear. Once the phy is ready it runs `wifi config`, so OpenWrt does not miss the radio configuration while the wireless device is still absent.
 
-首次发现 radio 时，`sprdwl-start` 创建并启用以下 AP；已有 UCI 无线配置会保留：
+On first radio discovery, `sprdwl-start` creates and enables the following AP; existing UCI wireless configuration is preserved:
 
-- 2.4 GHz，信道 6，HT20
+- 2.4 GHz, channel 6, HT20
 - SSID `OrangePi-3-LTS`
-- WPA2-PSK，初始密码 `orangepi@7`
-- AP 接入 `lan`，LAN 地址 `192.168.8.1/24`
+- WPA2-PSK, initial password `orangepi@7`
+- AP attached to `lan`, LAN address `192.168.8.1/24`
 
-初始密码是公开值，用户应及时更改。启动脚本会把当前 Wi-Fi 密码写入 root 专用文件 `/root/opi3lts-wifi-password`，不会把密码写入系统日志。
+The initial password is a public value and should be changed promptly. The startup script writes the current Wi-Fi password to the root-only file `/root/opi3lts-wifi-password` and does not log it to the system log.
 
-选择 2.4 GHz HT20 是因为它已在该板上完成 AP、手机连接和上网验证。曾测试的 VHT80 配置在当前 hostapd 中因 `ieee80211ac` / `vht_*` 配置项不识别而失败；本项目不把 5 GHz VHT80 宣称为已验证功能。
+2.4 GHz HT20 was chosen because AP mode, phone association and internet access have been verified on this board. A previously tested VHT80 configuration failed in the current hostapd because it does not recognize the `ieee80211ac` / `vht_*` options; this project does not claim 5 GHz VHT80 as verified.
 
-通过 UCI 修改 SSID、密码和信道：
+Change SSID, password and channel through UCI:
 
 ```sh
-uci set wireless.default_radio0.ssid='自己的名称'
-uci set wireless.default_radio0.key='自己的至少八位密码'
+uci set wireless.default_radio0.ssid='your-name'
+uci set wireless.default_radio0.key='your-password-at-least-eight-characters'
 uci set wireless.radio0.channel='11'
 uci commit wireless
 wifi reload
 ```
 
-## 实机验证
+## Hardware verification
 
-先检查 MMC/SDIO、电源时序、模块和 phy：
+First check MMC/SDIO, the power sequence, the modules and the phy:
 
 ```sh
 mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
@@ -78,7 +78,7 @@ lsmod | grep -E 'uwe5622_bsp_sdio|sprdwl_ng'
 iw dev
 ```
 
-成功启动时应能看到 MMC1 识别 SDIO 卡、驱动读取 `/lib/firmware/uwe5622/` 下的固件/INI，并由 `iw dev` 列出无线 phy。AP 启动后检查：
+On a successful boot you should see MMC1 enumerate the SDIO card, the driver read the firmware/INI files under `/lib/firmware/uwe5622/`, and `iw dev` list the wireless phy. After the AP starts, check:
 
 ```sh
 wifi status
@@ -88,17 +88,17 @@ iwinfo phy0-ap0 assoclist
 cat /tmp/dhcp.leases
 ```
 
-实机已验证的结果包括：`phy0-ap0` 类型为 AP、hostapd 报告 `AP-ENABLED`、WPA 四次握手完成、客户端从 LAN DHCP 获取地址并通过 `eth0` WAN 上网。应在重启后重复检查，以确认默认配置和延迟加载能恢复。
+Verified on real hardware: `phy0-ap0` is in AP mode, hostapd reports `AP-ENABLED`, the WPA four-way handshake completes, and the client obtains an address from the LAN DHCP server and reaches the internet through the `eth0` WAN. Repeat the checks after a reboot to confirm that the default configuration and delayed loading recover.
 
-## 常见故障定位
+## Common failure modes
 
-| 现象 | 优先检查 |
+| Symptom | Check first |
 | --- | --- |
-| `wifi-pwrseq: external clock not ready`，没有 MMC1 | DTS 的 RTC 外部时钟引用；`RTC_CLASS`、`RTC_DRV_SUN6I` 是否进入实际内核配置；`devices_deferred` |
-| MMC1 存在但扫描 SDIO 超时 | PH7 电源、PM3 复位、`mmc1` 的 `vmmc/vqmmc` 和 `wifi_pwrseq`；这是枚举/上电阶段，先不要查 hostapd |
-| 模块已加载但没有 phy | MMC1 是否识别卡、`dmesg` 中 SDIO probe 和固件加载日志、驱动服务是否在设备出现后启动 |
-| `iw dev` 有 phy，但无线配置为空 | 驱动加载后是否调用 `wifi config`；检查 `/etc/config/wireless` 和 `logread -e sprdwl-start` |
-| hostapd 报 `unknown configuration item` 的 VHT/11ac 参数 | 先使用已验证的 2.4 GHz、信道 6、HT20 配置 |
-| 手机关联成功但没有 IP | 检查 AP 是否加入 `lan`、`dhcp.lan.dhcpv4` 是否为 `server`、`br-lan` 地址是否为 `192.168.8.1/24` |
+| `wifi-pwrseq: external clock not ready`, no MMC1 | The DTS RTC external-clock reference; whether `RTC_CLASS` and `RTC_DRV_SUN6I` are in the effective kernel configuration; `devices_deferred` |
+| MMC1 exists but the SDIO scan times out | PH7 power, PM3 reset, `mmc1` `vmmc/vqmmc` and `wifi_pwrseq`; this is enumeration/power-up, so start with hostapd only after it works |
+| Modules are loaded but there is no phy | Whether MMC1 enumerated the card, SDIO probe and firmware-load messages in `dmesg`, and whether the driver service started after the device appeared |
+| `iw dev` shows a phy but the wireless configuration is empty | Whether `wifi config` ran after the driver loaded; check `/etc/config/wireless` and `logread -e sprdwl-start` |
+| hostapd reports `unknown configuration item` for VHT/11ac parameters | Use the verified 2.4 GHz, channel 6, HT20 configuration first |
+| The phone associates but gets no IP | Whether the AP is attached to `lan`, whether `dhcp.lan.dhcpv4` is `server`, and whether `br-lan` has `192.168.8.1/24` |
 
-此记录反映当前固定源码和一块 Orange Pi 3 LTS 的实机结果；修改内核、驱动、无线包或 DTS 后，应重新编译并重新做整机验证。
+This record reflects the current pinned source and the results from one Orange Pi 3 LTS. After changing the kernel, driver, wireless packages or DTS, rebuild and repeat the full hardware verification.

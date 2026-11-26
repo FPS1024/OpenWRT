@@ -1,63 +1,61 @@
-# Orange Pi 3 LTS · OpenWrt AP 路由器
+# Orange Pi 3 LTS · OpenWrt AP Router
 
-为全志 H6 的 Orange Pi 3 LTS 构建 OpenWrt 25.12.6（Linux 6.12），包含板级 DTS、UWE5622 Wi-Fi 驱动、默认 AP、LuCI 网页管理、Argon 主题和简体中文界面。OpenWrt 源码固定在 [`64900e7`](https://github.com/openwrt/openwrt/commit/64900e756efa667774214f9c6b17c113222e01f7)。
+Builds OpenWrt 25.12.6 (Linux 6.12) for the Allwinner H6-based Orange Pi 3 LTS, including the board DTS, the UWE5622 Wi-Fi driver, a default AP, the LuCI web admin, the Argon theme and a Simplified Chinese UI. The OpenWrt source is pinned to [`64900e7`](https://github.com/openwrt/openwrt/commit/64900e756efa667774214f9c6b17c113222e01f7).
 
-Wi-Fi 已在 Orange Pi 3 LTS 实机上验证：手机可连接 AP、获取地址并通过有线 WAN 上网。驱动适配细节和排错步骤见 [Wi-Fi 驱动适配说明](README-WIFI.md)。
+Wi-Fi has been verified on real Orange Pi 3 LTS hardware: a phone can join the AP, obtain an address and reach the internet through the wired WAN. Driver adaptation details and troubleshooting are in the [Wi-Fi driver notes](README-WIFI.md).
 
-## 默认网络
+## Default network
 
-| 项目 | 默认值 |
+| Item | Default |
 | --- | --- |
-| WAN | `eth0`，DHCP 客户端 |
-| 路由器地址 | `192.168.8.1/24` |
-| LAN DHCP 地址池 | `192.168.8.100` 起 |
-| Wi-Fi | 2.4 GHz，信道 6，HT20，WPA2-PSK |
-| SSID / 密码 | `OrangePi-3-LTS` / `orangepi@7` |
-| LuCI | `http://192.168.8.1`，默认 Argon 主题和简体中文 |
+| WAN | `eth0`, DHCP client |
+| Router address | `192.168.8.1/24` |
+| LAN DHCP pool | From `192.168.8.100` |
+| Wi-Fi | 2.4 GHz, channel 6, HT20, WPA2-PSK |
+| SSID / password | `OrangePi-3-LTS` / `orangepi@7` |
+| LuCI | `http://192.168.8.1`, Argon theme and Simplified Chinese by default |
 
-Wi-Fi 密码是公开的初始值，部署后请立即修改。设备不预设 root 管理密码；首次启动通过串口运行 `passwd`，再登录 LuCI。当前构建脚本已选择 LuCI/uhttpd；已有的旧镜像不会因此自动获得网页管理，需刷入新的成功构建镜像。
+The Wi-Fi password is a public initial value; change it immediately after deployment. No root password is preset; on first boot run `passwd` over the serial console, then log in to LuCI. The current build scripts select LuCI/uhttpd; older images do not gain the web UI automatically and require a newly built image.
 
 ## Docker
 
-镜像内置 Docker（`dockerd`、`containerd`、`runc`、`docker compose` 和 LuCI Dockerman）。首次启动的 `99-opi3lts` 会按镜像布局写入 Docker 默认值：
+The image bundles Docker (`dockerd`, `containerd`, `runc`, `docker compose` and LuCI Dockerman). On first boot, `99-opi3lts` writes the Docker defaults for the image layout:
 
-| 项目 | 默认值 |
+| Item | Default |
 | --- | --- |
-| 数据目录 | squashfs 镜像使用 `/overlay/docker`（真实 f2fs 挂载，给 overlay2 一个可用的 upperdir）；ext4 镜像沿用 `/opt/docker/`。文件系统不支持 overlay2 时 Docker 会回退 vfs |
-| 容器 DNS | LAN 地址（默认 `192.168.8.1`），走路由器 dnsmasq；默认 bridge 否则会回退到不可达的 `8.8.8.8` |
-| fw4 forwarding | `docker -> wan`，由 dockerd 初始化时写入，普通 bridge 容器可以出站 |
+| Data directory | The squashfs image uses `/overlay/docker` (a real f2fs mount, giving overlay2 a usable upperdir); the ext4 image keeps `/opt/docker/`. If the filesystem does not support overlay2, Docker falls back to vfs |
+| Container DNS | The LAN address (default `192.168.8.1`) through the router's dnsmasq; otherwise the default bridge falls back to the unreachable `8.8.8.8` |
+| fw4 forwarding | `docker -> wan`, written by the dockerd init so plain bridge containers can reach the internet |
 
-如果修改了 LAN 地址，需要同步修改 `/etc/config/dockerd` 里的 `dns`，然后重启 dockerd。
+If you change the LAN address, update `dns` in `/etc/config/dockerd` accordingly and restart dockerd.
 
-固件不预置任何第三方 Registry mirror。Docker Hub 直连不可用时，请自行在 `/etc/config/dockerd` 中配置 `registry_mirrors`。
+The firmware does not preset any third-party registry mirror. If Docker Hub is unreachable directly, configure `registry_mirrors` in `/etc/config/dockerd` yourself.
 
-Docker Compose 默认创建的用户自定义网络（`br-xxxx`）不在 `docker` zone 内；需要出站时请把对应接口加入 firewall，或让该容器使用 host 网络。启用 OpenClash 的 fake-ip DNS 时，容器若仍使用 dnsmasq 会拿到 fake-ip；要么让容器流量也经过 OpenClash 重定向，要么给容器使用不被劫持的 DNS。
+User-defined Docker Compose networks (`br-xxxx`) are not in the `docker` zone. To allow outbound traffic, add the interface to the firewall or give that container host networking.
 
-需要单个服务绕过 Docker bridge 时，可以自行使用 `--network host`；固件不预置或自动启动任何业务容器。
+When a single service needs to bypass the Docker bridge, use `--network host`; the firmware neither presets nor auto-starts any workload container.
 
-## 构建
+## Build
 
-推荐使用 Ubuntu x86-64，至少 4 核、8 GB 内存和 25 GB 可用磁盘。首次构建耗时较长；保留构建目录，之后 OpenWrt 会复用未变化的工具链、内核和软件包。
+Ubuntu x86-64 is recommended, with at least 4 cores, 8 GB of RAM and 25 GB of free disk. The first build takes a while; keep the build directory so OpenWrt can reuse the unchanged toolchain, kernel and packages.
 
 ```sh
-# 在仓库根目录；第一次使用时会创建并保留 .work/openwrt
+# From the repository root; the first run creates and keeps .work/openwrt
 sh scripts/build.sh
 
-# 已有 OpenWrt 构建目录时复用它
+# Reuse an existing OpenWrt build directory
 OPENWRT_DIR="$PWD/ow" JOBS="$(nproc)" sh scripts/build.sh
 ```
 
-`OPENWRT_DIR` 是构建目录；脚本会重置其中被改动的 OpenWrt 跟踪文件，再切换到固定源码版本并重新应用本仓库的 `overlay/`。请把自定义修改放在 `overlay/` 中。
+`OPENWRT_DIR` is the build directory. The script resets tracked OpenWrt files that were modified, checks out the pinned source revision and reapplies this repository's `overlay/`, so keep custom changes in `overlay/`.
 
-也可推送到 `main` 或在 GitHub Actions 手动运行 **Build OpenWrt for Orange Pi 3 LTS**。成功后打开该次 workflow run 页面底部的 **Artifacts**，下载 `openwrt-opi3lts`。压缩包包含刷机镜像、manifest、校验文件和 Wi-Fi 驱动包；构建日志在单独的 `build-diagnostics` artifact 中。本地和 CI 的镜像位于 `bin/targets/sunxi/cortexa53/`，包含 ext4 与 squashfs SD 卡镜像。
+You can also push to `main` or manually run **Build OpenWrt for Orange Pi 3 LTS** in GitHub Actions. When it succeeds, open the **Artifacts** section at the bottom of the workflow run and download `openwrt-opi3lts`. The archive contains the flashable image, the manifest, checksums and the Wi-Fi driver packages; build logs are in the separate `build-diagnostics` artifact. Local and CI images are written to `bin/targets/sunxi/cortexa53/` and include both ext4 and squashfs SD-card images.
 
-Actions 的默认生产构建不编译设备端 GCC、binutils、Git 和 Make，因此不会为开发工具付出额外的长时间编译。手动运行 workflow 时把 `include_dev_tools` 设为 true，或本地使用 `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh`，才会把这批工具放进固件。构建日志按 `package-compile`、`package-install`、`target-install` 和 `package-index` 分阶段保存；其中 `target-install` 是实际制作镜像的短阶段。
+The default production GitHub Actions build does not compile target-side GCC, binutils, Git or Make, so it does not spend extra time on development tools. Set `include_dev_tools` to true when manually running the workflow, or use `INCLUDE_DEV_TOOLS=1 sh scripts/build.sh` locally, to add them to the firmware. Build logs are saved by stage as `package-compile`, `package-install`, `target-install` and `package-index`; `target-install` is the short stage that actually creates the images.
 
-固件启用了官方 `packages` 和 LuCI 软件源，出厂包含 Argon 主题、Argon 设置页及其中文包，以及 LuCI 基础、Firewall 和软件包管理页面的简体中文翻译。`dnsmasq-full`、`libnettle8`、`libnetfilter-conntrack3` 以及 OpenClash 的 `bash`、`curl`、`ip-full`、`ruby`、`ruby-yaml` 和 `unzip` 直接编入镜像；`kmod-tun`、`kmod-inet-diag`、`kmod-nft-tproxy` 和 `kmod-nf-conntrack-netlink` 与当前内核匹配。Ruby 的 YJIT 在构建时关闭，避免为 JIT 额外编译整套 rustc/LLVM。默认生产镜像还包含 `sfdisk`、`partx-utils`、`losetup` 和 `resize2fs`。默认镜像不包含 Node.js；需要时请自行从软件源安装（官方 openwrt-25.12 源提供 Node 22，仓库 `overlay/feeds/packages/lang/node` 中的 Node 24 包定义保留但不再默认选中）。开发镜像额外提供 `git`、`git-http`、`make`、`gcc` 和 `binutils`。OpenWrt 目标软件包中没有名为 `cmake` 或 Debian `build-essential` 的包，因此不会写入无效的配置项；目标端的编译工具由 GCC、binutils 和 make 提供。Argon 来自上游源码并直接编入固件；官方 LuCI 软件源不托管 Argon 包。
+The firmware enables the official `packages` and LuCI feeds. The factory image includes the Argon theme, the Argon settings page and its Chinese package, plus Simplified Chinese translations for the LuCI base, firewall and package manager pages. `dnsmasq-full`, `libnettle8`, `libnetfilter-conntrack3`, `bash`, `curl`, `ip-full`, `ruby`, `ruby-yaml` and `unzip` are built into the image; `kmod-tun`, `kmod-inet-diag`, `kmod-nft-tproxy` and `kmod-nf-conntrack-netlink` match the current kernel. Ruby YJIT is disabled at build time to avoid compiling a full rustc/LLVM toolchain. The default production image also includes `sfdisk`, `partx-utils`, `losetup` and `resize2fs`. Node.js is not included; install it from the feed if needed (the official openwrt-25.12 feed provides Node 22; the Node 24 package definition under `overlay/feeds/packages/lang/node` is kept but no longer selected by default). The development image additionally provides `git`, `git-http`, `make`, `gcc` and `binutils`. OpenWrt has no target packages named `cmake` or Debian `build-essential`, so no invalid configuration is written; target-side build tools come from GCC, binutils and make. Argon is built from upstream sources and included directly; the official LuCI feed does not host Argon packages.
 
-固件内置 OpenClash LuCI 插件，版本固定为 [v0.48.002](https://github.com/vernesong/OpenClash/releases/tag/v0.48.002)，构建时下载并安装 `luci-app-openclash_0.48.002_all.ipk`。脚本固定校验 SHA-256 `f3f0d0514553aea8d542c62dc52ac26d1f79dbda24204280f1cb8ea7fff71e9e`，并检查 IPK 的包名、版本、架构以及 OpenClash 运行依赖已经进入镜像。
-
-SD 卡镜像首次启动会运行 `opi3lts-expand-storage`。脚本用 `/proc/self/mountinfo` 里根文件系统的设备号，经 `/sys/dev/block` 反查根分区及其父磁盘，因此不依赖 `/dev/root`（procd 会把 `/dev` 换成新的 tmpfs，只按 sysfs 建节点），也不写死设备名；只有查不到时才回退到按 `root=PARTUUID` 的分区号扫描。preinit 阶段先在 `mount_root` 之前扩分区；根分区正在使用、内核无法重读分区表时，脚本会先校验盘上分区表已经到达卡尾，再重启一次，让下一次启动直接读到新分区表，所以首次启动可能自动重启一次。系统挂载 overlay 后，S99 阶段才扩展 ext4/f2fs 文件系统。squashfs 镜像会扩展其可写 overlay，ext4 镜像会直接扩展根文件系统。只有确认根分区真的占满整张卡之后才会写 `/etc/opi3lts-storage-expanded`，避免一次空扩容就被标记成"已完成"而永久禁用扩容。镜像本身仍保持小体积，不能靠制作 8GB 的 squashfs 解决空间问题。用 balenaEtcher 或 `dd` 写入不同容量的卡后，可用下面的命令确认扩容已经完成：
+On first boot, the SD-card image runs `opi3lts-expand-storage`. The script reads the root filesystem's device number from `/proc/self/mountinfo`, resolves the root partition and its parent disk through `/sys/dev/block`, so it does not depend on `/dev/root` (procd replaces `/dev` with a new tmpfs and only creates nodes from sysfs) and does not hard-code device names; only when that lookup fails does it fall back to scanning the partition by the `root=PARTUUID` partition number. The preinit stage grows the partition before `mount_root`. When the root partition is in use and the kernel cannot re-read the partition table, the script first verifies that the on-disk table already reaches the end of the card, then reboots once so the next boot reads the new table; first boot may therefore reboot automatically. After the system mounts the overlay, the S99 stage grows the ext4/f2fs filesystem. The squashfs image grows its writable overlay; the ext4 image grows the root filesystem directly. It only writes `/etc/opi3lts-storage-expanded` after confirming that the root partition really fills the card, so an accidental empty expansion cannot be marked "done" and permanently disable growth. The image itself stays small; a multi-gigabyte squashfs is not the way to solve free space. After writing the image to cards of different capacities with balenaEtcher or `dd`, verify the expansion with:
 
 ```sh
 logread -e opi3lts-expand-storage
@@ -66,11 +64,11 @@ df -h
 ls -l /etc/opi3lts-storage-expanded
 ```
 
-GitHub Actions 可选发送构建通知邮件。到仓库 **Settings → Secrets and variables → Actions** 添加 `SMTP_USERNAME` 和 `SMTP_PASSWORD`；默认使用 Outlook.com 的 `smtp-mail.outlook.com:587`，也可以添加可选的 `SMTP_SERVER` 覆盖服务器地址。Outlook 通常需要启用 SMTP AUTH 或使用应用专用密码。未配置 Secrets 时只跳过通知，不影响构建结果。刷机后可运行 `apk update` 安装其他用户态软件，避免从滚动 Snapshot 源重复安装这些已内置依赖。
+GitHub Actions can optionally send build-result email. Go to the repository's **Settings → Secrets and variables → Actions** and add `SMTP_USERNAME` and `SMTP_PASSWORD`; the default server is Outlook.com's `smtp-mail.outlook.com:587`, and an optional `SMTP_SERVER` can override it. Outlook usually requires SMTP AUTH or an app password. Without the secrets, only the notification is skipped and the build result is unaffected. After flashing, run `apk update` to install other userland software and avoid reinstalling the dependencies already built into the image from the rolling snapshot feed.
 
-## 刷写
+## Flashing
 
-解压下载的 `.img.gz`，确认 `/dev/sdX` 是 SD 卡设备后写入（可以用BalenaEcher等工具直接刷入），刷入后自动占满SD卡空间：
+Extract the downloaded `.img.gz`, confirm that `/dev/sdX` is the SD-card device, then write it (balenaEtcher or a similar tool also works; the image expands to fill the card on first boot):
 
 ```sh
 gunzip -k openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img.gz
@@ -78,11 +76,11 @@ sudo dd if=openwrt-sunxi-cortexa53-xunlong_orangepi-3-lts-squashfs-sdcard.img \
   of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-**写错设备会清除该设备上的数据。** 镜像使用本仓库的 SPL/U-Boot 和 Orange Pi 3 LTS 专用设备树。
+**Writing to the wrong device destroys its data.** The image uses this repository's SPL/U-Boot and the Orange Pi 3 LTS-specific device tree.
 
-## 修改 Wi-Fi
+## Changing Wi-Fi
 
-可在 LuCI 的 **Network → Wireless** 修改，也可通过 SSH/串口使用 UCI：
+Use **Network → Wireless** in LuCI, or UCI over SSH/serial:
 
 ```sh
 uci set wireless.default_radio0.ssid='SSID'
@@ -91,4 +89,4 @@ uci commit wireless
 wifi reload
 ```
 
-初次启动时驱动服务创建默认无线配置；之后会保留用户已有设置,建议重启以后再投入使用。
+On first boot the driver service creates the default wireless configuration; existing user settings are preserved afterwards. It is recommended to reboot before putting the device into service.

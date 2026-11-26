@@ -228,13 +228,13 @@ if ! sh "$HERE/scripts/prepare-argon.sh" "$OW_DIR" > "$LOG_DIR/argon-sources.txt
 fi
 cat "$LOG_DIR/argon-sources.txt"
 
-if ! sh "$HERE/scripts/prepare-openclash.sh" "$OW_DIR" > "$LOG_DIR/openclash-sources.txt" 2>&1; then
-	cat "$LOG_DIR/openclash-sources.txt"
-	exit 1
-fi
-cat "$LOG_DIR/openclash-sources.txt"
+# OpenClash is no longer bundled. Drop the generated prebuilt package and any
+# stale built package from earlier revisions so an incremental tree cannot
+# pull it back into the image or the package index.
+rm -rf "$OW_DIR/package/luci-app-openclash-prebuilt"
+find "$OW_DIR/dl" -maxdepth 1 -type f -name 'luci-app-openclash*.ipk' -delete 2>/dev/null || true
 if [ -d "$OW_DIR/bin/packages" ]; then
-	find "$OW_DIR/bin/packages" -type f \( -name 'luci-app-openclash*.ipk' -o -name 'luci-app-openclash*.apk' \) -delete
+	find "$OW_DIR/bin/packages" -type f -name 'luci-app-openclash*' -delete
 fi
 
 if [ ! -s .config ] \
@@ -254,7 +254,6 @@ CONFIG_PACKAGE_luci=y
 CONFIG_PACKAGE_uhttpd=y
 CONFIG_PACKAGE_uhttpd-mod-ubus=y
 CONFIG_PACKAGE_luci-compat=y
-CONFIG_PACKAGE_luci-app-openclash=y
 CONFIG_PACKAGE_kmod-tun=y
 CONFIG_PACKAGE_kmod-inet-diag=y
 CONFIG_PACKAGE_kmod-nft-tproxy=y
@@ -270,7 +269,7 @@ CONFIG_PACKAGE_ca-bundle=y
 CONFIG_PACKAGE_ip-full=y
 CONFIG_PACKAGE_ruby=y
 # YJIT is optional and pulls rust/host (a full rustc/LLVM build) into the
-# toolchain.  OpenClash only needs the Ruby runtime and YAML extension.
+# toolchain.  The image only needs the Ruby runtime and YAML extension.
 # CONFIG_RUBY_ENABLE_YJIT is not set
 CONFIG_PACKAGE_ruby-yaml=y
 CONFIG_PACKAGE_unzip=y
@@ -319,11 +318,6 @@ EOF
 fi
 fi
 
-# Keep the pinned OpenClash application selected in an existing incremental
-# .config as well as in a newly created configuration.
-sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
-printf '%s\n' 'CONFIG_PACKAGE_luci-app-openclash=y' >> .config
-
 # Keep the web UI selected in an existing incremental build tree too.
 for symbol in \
 	PER_FEED_REPO \
@@ -334,7 +328,6 @@ for symbol in \
 	PACKAGE_uhttpd \
 	PACKAGE_uhttpd-mod-ubus \
 	PACKAGE_luci-compat \
-	PACKAGE_luci-app-openclash \
 	PACKAGE_kmod-tun \
 	PACKAGE_kmod-inet-diag \
 	PACKAGE_kmod-nft-tproxy \
@@ -378,7 +371,11 @@ done
 for symbol in PACKAGE_node PACKAGE_node-npm; do
 	printf '# CONFIG_%s is not set\n' "$symbol" >> .config
 done
-# YJIT is optional and forces a full rust/host (LLVM) build.  OpenClash only
+# OpenClash is no longer part of the image. Remove its selection from an
+# existing incremental .config so defconfig cannot keep building it.
+sed -i '/^CONFIG_PACKAGE_luci-app-openclash=/d; /^# CONFIG_PACKAGE_luci-app-openclash is not set$/d' .config
+printf '%s\n' '# CONFIG_PACKAGE_luci-app-openclash is not set' >> .config
+# YJIT is optional and forces a full rust/host (LLVM) build.  The image only
 # needs the Ruby runtime and the YAML extension.
 sed -i '/^CONFIG_RUBY_ENABLE_YJIT=/d; /^# CONFIG_RUBY_ENABLE_YJIT is not set$/d' .config
 printf '%s\n' '# CONFIG_RUBY_ENABLE_YJIT is not set' >> .config
@@ -428,10 +425,6 @@ grep -qx 'CONFIG_FEED_packages=y' .config || { echo 'OpenWrt packages feed is no
 grep -qx 'CONFIG_FEED_luci=y' .config || { echo 'LuCI package feed is not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_LUCI_LANG_zh_Hans=y' .config || { echo 'LuCI Simplified Chinese translations are not enabled' >&2; exit 1; }
 grep -qx 'CONFIG_PACKAGE_luci-i18n-argon-config-zh-cn=y' .config || { echo 'Argon Config Chinese translation was not selected by defconfig' >&2; exit 1; }
-if ! grep -qx 'CONFIG_PACKAGE_luci-app-openclash=y' .config; then
-	echo 'OpenClash app was not selected for the factory image' >&2
-	exit 1
-fi
 if grep -qx 'CONFIG_PACKAGE_node=y' .config || grep -qx 'CONFIG_PACKAGE_node-npm=y' .config; then
 	echo 'Node.js must not be selected for the factory image' >&2
 	exit 1
@@ -505,7 +498,6 @@ MANIFEST="$IMAGE_DIR/openwrt-sunxi-cortexa53-${DEVICE}.manifest"
 test -s "$MANIFEST" || { echo "Image manifest is missing: $MANIFEST" >&2; exit 1; }
 for package in \
 	luci-base luci-mod-admin-full luci-compat uhttpd uhttpd-mod-ubus \
-	luci-app-openclash \
 	dnsmasq-full libnettle8 libnetfilter-conntrack3 \
 	bash curl ca-bundle ip-full ruby ruby-yaml unzip \
 	sfdisk partx-utils losetup resize2fs \
@@ -519,11 +511,10 @@ if [ "$INCLUDE_DEV_TOOLS" = 1 ]; then
 		grep -q "^${package} " "$MANIFEST" || { echo "Requested development package is missing: $package" >&2; exit 1; }
 	done
 fi
-if ! grep -q '^luci-app-openclash ' "$MANIFEST"; then
-	echo 'OpenClash app package is missing from the image manifest' >&2
+if grep -q '^luci-app-openclash ' "$MANIFEST"; then
+	echo 'OpenClash must not be included in the factory image' >&2
 	exit 1
 fi
-echo 'OpenClash v0.48.002 app and runtime dependencies are bundled'
 for package in dockerd docker containerd runc tini docker-compose luci-app-dockerman; do
 	grep -q "^${package} " "$MANIFEST" || { echo "Docker package is missing: $package" >&2; exit 1; }
 done
